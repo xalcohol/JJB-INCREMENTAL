@@ -1,0 +1,307 @@
+-- // JJBI Auto Story Script
+-- // Kill-scriptable, movable GUI with toggle
+
+-- [[ KILL FLAG ]] --
+local ScriptKilled = false
+local function KillScript()
+    ScriptKilled = true
+end
+
+-- [[ SERVICES ]] --
+local Players           = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local PlayerGui         = Players.LocalPlayer.PlayerGui
+
+-- [[ REMOTES ]] --
+local Network       = ReplicatedStorage:WaitForChild("Network")
+local CombatAction  = Network:WaitForChild("CombatAction")
+local PrestigeEvent = Network:WaitForChild("PrestigeEvent")
+
+-- [[ TIMING ]] --
+local ACTION_CD = 0.2
+
+-- [[ FIRE HELPERS ]] --
+local function FireCombat(...)  CombatAction:FireServer(...)  end
+local function FirePrestige()   PrestigeEvent:FireServer()    end
+
+-- [[ GUI SETUP ]] --
+local ScreenGui = Instance.new("ScreenGui")
+ScreenGui.Name = "AutoStoryGUI"
+ScreenGui.ResetOnSpawn = false
+ScreenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+ScreenGui.Parent = PlayerGui
+
+local MainFrame = Instance.new("Frame")
+MainFrame.Name = "MainFrame"
+MainFrame.Size = UDim2.new(0, 220, 0, 145)
+MainFrame.Position = UDim2.new(0.5, -110, 0.02, 0)
+MainFrame.BackgroundColor3 = Color3.fromRGB(18, 18, 24)
+MainFrame.BorderSizePixel = 0
+MainFrame.Active = true
+MainFrame.Draggable = true
+MainFrame.Parent = ScreenGui
+
+local Corner = Instance.new("UICorner")
+Corner.CornerRadius = UDim.new(0, 8)
+Corner.Parent = MainFrame
+
+local Stroke = Instance.new("UIStroke")
+Stroke.Color = Color3.fromRGB(80, 80, 120)
+Stroke.Thickness = 1.2
+Stroke.Parent = MainFrame
+
+local TitleBar = Instance.new("Frame")
+TitleBar.Size = UDim2.new(1, 0, 0, 28)
+TitleBar.BackgroundColor3 = Color3.fromRGB(30, 30, 45)
+TitleBar.BorderSizePixel = 0
+TitleBar.Parent = MainFrame
+
+local TitleCorner = Instance.new("UICorner")
+TitleCorner.CornerRadius = UDim.new(0, 8)
+TitleCorner.Parent = TitleBar
+
+local TitlePatch = Instance.new("Frame")
+TitlePatch.Size = UDim2.new(1, 0, 0.5, 0)
+TitlePatch.Position = UDim2.new(0, 0, 0.5, 0)
+TitlePatch.BackgroundColor3 = Color3.fromRGB(30, 30, 45)
+TitlePatch.BorderSizePixel = 0
+TitlePatch.Parent = TitleBar
+
+local TitleLabel = Instance.new("TextLabel")
+TitleLabel.Size = UDim2.new(1, 0, 1, 0)
+TitleLabel.BackgroundTransparency = 1
+TitleLabel.Text = "JJBI Auto Story"
+TitleLabel.TextColor3 = Color3.fromRGB(200, 200, 255)
+TitleLabel.TextSize = 13
+TitleLabel.Font = Enum.Font.GothamBold
+TitleLabel.Parent = TitleBar
+
+-- Grind Toggle Button
+local ToggleBtn = Instance.new("TextButton")
+ToggleBtn.Size = UDim2.new(1, -20, 0, 32)
+ToggleBtn.Position = UDim2.new(0, 10, 0, 36)
+ToggleBtn.BackgroundColor3 = Color3.fromRGB(45, 45, 70)
+ToggleBtn.TextColor3 = Color3.fromRGB(180, 180, 255)
+ToggleBtn.Text = ">>  Start Grind"
+ToggleBtn.TextSize = 13
+ToggleBtn.Font = Enum.Font.GothamBold
+ToggleBtn.BorderSizePixel = 0
+ToggleBtn.Parent = MainFrame
+
+local ToggleCorner = Instance.new("UICorner")
+ToggleCorner.CornerRadius = UDim.new(0, 6)
+ToggleCorner.Parent = ToggleBtn
+
+-- World Boss Toggle Button
+local BossBtn = Instance.new("TextButton")
+BossBtn.Size = UDim2.new(1, -20, 0, 26)
+BossBtn.Position = UDim2.new(0, 10, 0, 76)
+BossBtn.BackgroundColor3 = Color3.fromRGB(35, 35, 50)
+BossBtn.TextColor3 = Color3.fromRGB(100, 100, 130)
+BossBtn.Text = ">>  World Boss Scanner: OFF"
+BossBtn.TextSize = 11
+BossBtn.Font = Enum.Font.GothamBold
+BossBtn.BorderSizePixel = 0
+BossBtn.Active = false
+BossBtn.Parent = MainFrame
+
+local BossCorner = Instance.new("UICorner")
+BossCorner.CornerRadius = UDim.new(0, 6)
+BossCorner.Parent = BossBtn
+
+-- Kill Button
+local KillBtn = Instance.new("TextButton")
+KillBtn.Size = UDim2.new(1, -20, 0, 24)
+KillBtn.Position = UDim2.new(0, 10, 0, 110)
+KillBtn.BackgroundColor3 = Color3.fromRGB(80, 28, 28)
+KillBtn.TextColor3 = Color3.fromRGB(255, 120, 120)
+KillBtn.Text = "[X]  Kill Script"
+KillBtn.TextSize = 12
+KillBtn.Font = Enum.Font.GothamBold
+KillBtn.BorderSizePixel = 0
+KillBtn.Parent = MainFrame
+
+local KillCorner = Instance.new("UICorner")
+KillCorner.CornerRadius = UDim.new(0, 6)
+KillCorner.Parent = KillBtn
+
+-- [[ STATE ]] --
+local GrindEnabled   = false
+local BossScanEnabled = false
+local BossPriority   = false
+
+-- [[ PATH HELPERS ]] --
+local function SafeGet(root, ...)
+    local current = root
+    for _, name in ipairs({...}) do
+        if not current then return nil end
+        current = current:FindFirstChild(name)
+    end
+    return current
+end
+
+local function GetCombatRoot()
+    return SafeGet(PlayerGui,
+        "JJBIMenu","MainFrame","ContentContainer",
+        "SingleplayerFrame","MainPanel","InnerContent",
+        "ContentArea","StoryFrame","CombatMainFrame","ContentContainer"
+    )
+end
+
+local function IsInBattle()
+    local root = GetCombatRoot()
+    if not root then return false end
+    local allies = SafeGet(root, "HealthbarArea", "AlliesContainer")
+    return allies and allies:FindFirstChild("Fighter_Player") ~= nil
+end
+
+local function GetEnergy()
+    local root = GetCombatRoot()
+    if not root then return 0 end
+    local label = root:FindFirstChild("ResourceLabel")
+    if not label then return 0 end
+    return tonumber((label.Text or ""):match("ENERGY:%s*(%d+)")) or 0
+end
+
+local function IsBokuNoRhythm()
+    local btn = SafeGet(PlayerGui,
+        "JJBIMenu","MainFrame","ContentContainer",
+        "SingleplayerFrame","MainPanel","InnerContent",
+        "ContentArea","StoryFrame","CombatMainFrame","ContentContainer",
+        "ButtonContainer","StoryEncounterBtn"
+    )
+    if not btn then return false end
+    for _, obj in ipairs({ btn, table.unpack(btn:GetDescendants()) }) do
+        if obj:IsA("TextLabel") or obj:IsA("TextButton") then
+            if (obj.Text or ""):find("Boku no Rhythm") then return true end
+        end
+    end
+    return false
+end
+
+-- [[ WORLD BOSS DETECTION ]] --
+local function IsWorldBossActive()
+    return false
+end
+
+local function RunBossScanner()
+    while GrindEnabled and BossScanEnabled and not ScriptKilled do
+        if IsWorldBossActive() then
+            if not BossPriority then
+                warn("[AutoStory] World Boss detected — taking priority.")
+            end
+            BossPriority = true
+        else
+            BossPriority = false
+        end
+        task.wait(ACTION_CD)
+    end
+    BossPriority = false
+end
+
+-- [[ CORE ACTIONS ]] --
+local function TryPrestige()
+    FirePrestige()
+    task.wait(ACTION_CD)
+end
+
+-- [[ BATTLE LOOP ]] --
+local function RunBattleLoop()
+    while GrindEnabled and not ScriptKilled and IsInBattle() do
+        if GetEnergy() >= 15 then
+            FireCombat("Attack", { SkillName = "Infinite Rotation" })
+        else
+            FireCombat("Attack", { SkillName = "Rest" })
+        end
+        task.wait(ACTION_CD)
+    end
+end
+
+-- [[ MAIN GRIND LOOP ]] --
+local function RunGrindLoop()
+    if IsInBattle() then
+        warn("[AutoStory] Already in battle on start — finishing current fight first.")
+        RunBattleLoop()
+        task.wait(ACTION_CD)
+    end
+
+    TryPrestige()
+    task.wait(ACTION_CD)
+
+    while GrindEnabled and not ScriptKilled do
+
+        if BossScanEnabled and BossPriority then
+            warn("[AutoStory] Waiting on World Boss fight...")
+            task.wait(ACTION_CD)
+
+        elseif IsBokuNoRhythm() then
+            warn("[AutoStory] Boku no Rhythm reached — Prestiging.")
+            TryPrestige()
+            task.wait(ACTION_CD)
+
+        else
+            FireCombat("EngageStory")
+            task.wait(ACTION_CD)
+            RunBattleLoop()
+            task.wait(ACTION_CD)
+        end
+
+        task.wait(ACTION_CD)
+    end
+end
+
+-- [[ TOGGLE GRIND ]] --
+ToggleBtn.MouseButton1Click:Connect(function()
+    if ScriptKilled then return end
+    GrindEnabled = not GrindEnabled
+
+    if GrindEnabled then
+        ToggleBtn.Text = "||  Auto Grinding"
+        ToggleBtn.BackgroundColor3 = Color3.fromRGB(30, 70, 40)
+        ToggleBtn.TextColor3 = Color3.fromRGB(120, 255, 160)
+        BossBtn.Active = true
+        BossBtn.BackgroundColor3 = Color3.fromRGB(45, 45, 70)
+        BossBtn.TextColor3 = Color3.fromRGB(180, 180, 255)
+        task.spawn(RunGrindLoop)
+    else
+        ToggleBtn.Text = ">>  Start Grind"
+        ToggleBtn.BackgroundColor3 = Color3.fromRGB(45, 45, 70)
+        ToggleBtn.TextColor3 = Color3.fromRGB(180, 180, 255)
+        BossScanEnabled = false
+        BossPriority = false
+        BossBtn.Active = false
+        BossBtn.Text = ">>  World Boss Scanner: OFF"
+        BossBtn.BackgroundColor3 = Color3.fromRGB(35, 35, 50)
+        BossBtn.TextColor3 = Color3.fromRGB(100, 100, 130)
+    end
+end)
+
+-- [[ TOGGLE BOSS SCANNER ]] --
+BossBtn.MouseButton1Click:Connect(function()
+    if ScriptKilled or not GrindEnabled then return end
+    BossScanEnabled = not BossScanEnabled
+
+    if BossScanEnabled then
+        BossBtn.Text = "||  World Boss Scanner: ON"
+        BossBtn.BackgroundColor3 = Color3.fromRGB(70, 50, 20)
+        BossBtn.TextColor3 = Color3.fromRGB(255, 200, 80)
+        task.spawn(RunBossScanner)
+    else
+        BossScanEnabled = false
+        BossPriority = false
+        BossBtn.Text = ">>  World Boss Scanner: OFF"
+        BossBtn.BackgroundColor3 = Color3.fromRGB(45, 45, 70)
+        BossBtn.TextColor3 = Color3.fromRGB(180, 180, 255)
+    end
+end)
+
+-- [[ KILL ]] --
+KillBtn.MouseButton1Click:Connect(function()
+    GrindEnabled = false
+    BossScanEnabled = false
+    KillScript()
+    task.wait(ACTION_CD)
+    ScreenGui:Destroy()
+end)
+
+print("[AutoStory] Script loaded. GUI ready.")

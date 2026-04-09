@@ -116,7 +116,7 @@ local INV_STAND_PATH = {
 local ENERGY_THRESHOLD  = 20
 local STAMINA_THRESHOLD = 20
 local HP_DANGER         = 0.30
-local HP_HEAL           = 0.80
+local HP_HEAL           = 0.74
 
 -- ================================================================
 -- [[ GUI ]]
@@ -142,7 +142,6 @@ do
     local s = Instance.new("UIStroke"); s.Color = Color3.fromRGB(80,80,120); s.Thickness = 1.2; s.Parent = MainFrame
 end
 
--- Title Bar
 local TitleBar = Instance.new("Frame")
 TitleBar.Size = UDim2.new(1, 0, 0, 28)
 TitleBar.BackgroundColor3 = Color3.fromRGB(30, 30, 45)
@@ -180,7 +179,6 @@ do
     local s = Instance.new("UIStroke"); s.Color = Color3.fromRGB(100,40,40); s.Thickness = 1; s.Parent = PrestigeBtn
 end
 
--- Info Strip
 local InfoStrip = Instance.new("Frame")
 InfoStrip.Size = UDim2.new(1, -20, 0, 52)
 InfoStrip.Position = UDim2.new(0, 10, 0, 33)
@@ -219,7 +217,6 @@ end
 local StandLabel, StandSwapBtn = MakeInfoRow(3,  "Stand: ---", Color3.fromRGB(160,200,255))
 local StyleLabel, StyleSwapBtn = MakeInfoRow(28, "Style: ---", Color3.fromRGB(255,200,140))
 
--- Prestige glow
 local PrestigeGlow = Instance.new("Frame")
 PrestigeGlow.Name = "PrestigeGlow"
 PrestigeGlow.Size = UDim2.new(1, -20, 0, 14)
@@ -354,7 +351,6 @@ local function TryFleeFromDungeon()
     local waited = 0
     while waited < 3 do
         if (logText.Text or ""):find("DUNGEON FLED!") then
-            --warn("[Dungeon] Flee confirmed.")
             return true
         end
         task.wait(0.2); waited += 0.2
@@ -503,7 +499,7 @@ end
 
 local function EnsureULFForStory()
     if CurrentStyle == "ULF" then return end
-    --warn("[Story] Style is not ULF — swapping.")
+    -- warn("[Story] Style is not ULF — swapping.")
     SwapStyle(1)
     local waited = 0
     while waited < 5 do
@@ -511,7 +507,7 @@ local function EnsureULFForStory()
         DetectLoadoutFromInventory()
         if CurrentStyle == "ULF" then return end
     end
-    --warn("[Story] ULF swap timed out — proceeding.")
+    -- warn("[Story] ULF swap timed out — proceeding.")
 end
 
 -- ================================================================
@@ -642,7 +638,6 @@ local function RunWorldBossTick()
 
     if not hasEnergy and not hasStamina then UseSkill(ctx,"Rest"); return end
 
-    -- CC first: TA4 Golden Spin -> KOU Illusory Presence
     if hasEnergy and CanUse(ctx,"Golden Spin") then
         if not EnemyIsStunImmune(ctx) and not EnemyIsStunned(ctx) then
             UseSkill(ctx,"Golden Spin"); return
@@ -655,7 +650,6 @@ local function RunWorldBossTick()
         end
     end
 
-    -- DoT stacking
     if hasEnergy and CanUse(ctx,"Cellular Destruction") then
         if not EnemyIsPoisoned(ctx) then
             UseSkill(ctx,"Cellular Destruction"); return
@@ -666,7 +660,6 @@ local function RunWorldBossTick()
         UseSkill(ctx,"Rain of Debris"); return
     end
 
-    -- Bleed: Dimensional Slash or Malevolent Shrine (interchangeable)
     if hasEnergy and CanUse(ctx,"Dimensional Slash") then
         if not EnemyIsBleeding(ctx) then
             UseSkill(ctx,"Dimensional Slash"); return
@@ -679,21 +672,18 @@ local function RunWorldBossTick()
         end
     end
 
-    -- Burn
     if hasStamina and CanUse(ctx,"Melting Overdrive") then
         if not EnemyIsBurning(ctx) then
             UseSkill(ctx,"Melting Overdrive"); return
         end
     end
 
-    -- Absolute Energy — after all CC/DoT placed, pre-damage buff
     if hasEnergy and CanUse(ctx,"Absolute Energy") then
         if not PlayerHasStrengthBuff(ctx) then
             UseSkill(ctx,"Absolute Energy"); return
         end
     end
 
-    -- Standard damage
     if hasEnergy and CanUse(ctx,"Infinite Rotation") then
         UseSkill(ctx,"Infinite Rotation"); return
     end
@@ -701,7 +691,6 @@ local function RunWorldBossTick()
         UseSkill(ctx,"Raging Demon"); return
     end
 
-    -- Resource fallbacks
     if not hasEnergy and hasStamina then
         if     CanUse(ctx,"Melting Overdrive")  then UseSkill(ctx,"Melting Overdrive");  return
         elseif CanUse(ctx,"Malevolent Shrine")  then UseSkill(ctx,"Malevolent Shrine");  return
@@ -765,40 +754,30 @@ local function GetBossNameText()
     return lbl and (lbl.Text or "") or ""
 end
 
--- Smart timer wait — reads timer and sleeps in stages:
--- > 30min  → sleep 30min → re-read → fall into 10min checks
--- > 10min  → sleep 10min → re-read → repeat until ≤ 10min
--- ≤ 10min  → sleep exact duration → return (boss window imminent)
 local function WaitForBossTimer()
     while StoryEnabled and not ScriptKilled do
         local secs = ParseTimerLabel()
 
         if not secs or secs <= 0 then
-            -- Timer gone or zero — boss window likely active
             return
         end
 
         if secs > 30 * 60 then
-            -- Sleep 30min then re-read to drop into 10min checks
-            --warn(string.format("[WorldBoss] Timer %ds (>30min) — sleeping 30min then rechecking.", secs))
+            -- warn(string.format("[WorldBoss] Timer %ds (>30min) — sleeping 30min then rechecking.", secs))
             local elapsed = 0
             while elapsed < 1800 and StoryEnabled and not ScriptKilled do
                 task.wait(1); elapsed += 1
             end
-            -- Loop back to re-read timer
 
         elseif secs > 10 * 60 then
-            -- Sleep 10min then re-read
-            --warn(string.format("[WorldBoss] Timer %ds (>10min) — sleeping 10min then rechecking.", secs))
+            -- warn(string.format("[WorldBoss] Timer %ds (>10min) — sleeping 10min then rechecking.", secs))
             local elapsed = 0
             while elapsed < 600 and StoryEnabled and not ScriptKilled do
                 task.wait(1); elapsed += 1
             end
-            -- Loop back to re-read timer
 
         else
-            -- ≤ 10min — wait the exact remaining time then return
-            --warn(string.format("[WorldBoss] Timer %ds (≤10min) — waiting exact duration.", secs))
+            -- warn(string.format("[WorldBoss] Timer %ds (≤10min) — waiting exact duration.", secs))
             local elapsed = 0
             while elapsed < secs and StoryEnabled and not ScriptKilled do
                 task.wait(1); elapsed += 1
@@ -810,34 +789,33 @@ end
 
 -- ================================================================
 -- [[ WORLD BOSS SCANNER ]]
--- Parallel loop while StoryEnabled — no stacking, clean scheduling
 -- ================================================================
 local function RunWorldBossScanner()
-    -- Initial wait on story toggle
-    WaitForBossTimer()
+    -- Check immediately on start in case a boss is already available
+    local engageText = GetEngageBtnText()
+    if not engageText:find("ENGAGE BOSS") then
+        -- No boss up yet — wait for the timer
+        WaitForBossTimer()
+    end
 
     while StoryEnabled and not ScriptKilled do
         local engageText = GetEngageBtnText()
 
         if engageText:find("ENGAGE BOSS") then
-            -- Boss available — set priority and wait for fight to complete
-            --warn("[WorldBoss] Boss available — flagging priority.")
+            -- warn("[WorldBoss] Boss available — flagging priority.")
             WorldBossPriority = true
             while WorldBossPriority and StoryEnabled and not ScriptKilled do
                 task.wait(1)
             end
-            -- Fight done — wait 10s then re-read timer for next cycle
             task.wait(10)
             WaitForBossTimer()
 
         elseif engageText:find("ALREADY FOUGHT") then
-            -- Already fought — re-read timer for next spawn
-            --warn("[WorldBoss] Already fought this cycle.")
+            -- warn("[WorldBoss] Already fought this cycle.")
             task.wait(5)
             WaitForBossTimer()
 
         else
-            -- WAITING / UNKNOWN THREAT — re-read timer
             task.wait(5)
             WaitForBossTimer()
         end
@@ -851,11 +829,10 @@ local function RunWorldBossFight()
     PreBossStand = CurrentStand
     PreBossStyle = CurrentStyle
 
-    --warn(string.format("[WorldBoss] Engaging — %s + %s", CurrentStand, CurrentStyle))
+    -- warn(string.format("[WorldBoss] Engaging — %s + %s", CurrentStand, CurrentStyle))
 
     EngageWorldBoss()
 
-    -- Wait for TurnLabel to confirm fight started
     local turnLabel = SafeGet(PlayerGui,
         "JJBIMenu","MainFrame","ContentContainer","SingleplayerFrame",
         "MainPanel","InnerContent","ContentArea","WorldBossFrame",
@@ -873,12 +850,11 @@ local function RunWorldBossFight()
     end
 
     if not fightStarted then
-        --warn("[WorldBoss] Fight start unconfirmed — firing fallback attack.")
+        -- warn("[WorldBoss] Fight start unconfirmed — firing fallback attack.")
         WorldBossUseSkill("Infinite Rotation")
         task.wait(1)
     end
 
-    -- Log path for completion detection
     local logText = SafeGet(PlayerGui,
         "JJBIMenu","MainFrame","ContentContainer","SingleplayerFrame",
         "MainPanel","InnerContent","ContentArea","WorldBossFrame",
@@ -889,7 +865,6 @@ local function RunWorldBossFight()
     task.wait(0.5)
     ConfirmLoadoutInCombat(WorldBossCtx)
 
-    -- Combat loop — exits on log completion or 120s safety ceiling
     local elapsed  = 0
     local finished = false
 
@@ -908,13 +883,6 @@ local function RunWorldBossFight()
 
     WorldBossCtx.HasBlockedThisDip = false
 
-    if finished then
-        --warn("[WorldBoss] Fight complete — resuming story.")
-    else
-        --warn("[WorldBoss] Fight timed out — resuming story.")
-    end
-
-    -- Restore pre-boss loadout if anything was swapped
     if CurrentStyle ~= PreBossStyle then
         SwapStyle(1); task.wait(0.5)
     end
@@ -957,7 +925,7 @@ local function RunStoryLoop()
     task.wait(0.5)
 
     if IsInStoryBattle() then
-        --warn("[Story] Already in story battle — finishing first.")
+        -- warn("[Story] Already in story battle — finishing first.")
         RunBattleLoop(StoryCtx, function() return StoryEnabled end, IsInStoryBattle)
         task.wait(ACTION_CD)
     end
@@ -967,14 +935,11 @@ local function RunStoryLoop()
         task.wait(ACTION_CD)
     end
 
-    -- World boss scanner runs in parallel while story is on
     task.spawn(RunWorldBossScanner)
 
     while StoryEnabled and not ScriptKilled do
-
-        -- World boss takes priority — finish current battle first
         if WorldBossPriority then
-            --warn("[Story] World boss priority — finishing open battle first.")
+            -- warn("[Story] World boss priority — finishing open battle first.")
             if IsInStoryBattle() then
                 RunBattleLoop(StoryCtx, function() return StoryEnabled end, IsInStoryBattle)
                 task.wait(ACTION_CD)
@@ -983,7 +948,7 @@ local function RunStoryLoop()
             task.wait(ACTION_CD)
 
         elseif PrestigeEnabled and IsBokuNoRhythm() then
-            --warn("[Story] Boku no Rhythm — Prestiging.")
+            -- warn("[Story] Boku no Rhythm — Prestiging.")
             TryPrestige()
             task.wait(ACTION_CD)
 
@@ -1005,7 +970,7 @@ local function RunDungeonLoop()
     DetectLoadoutFromInventory()
 
     if IsInStoryBattle() then
-        --warn("[Dungeon] In story battle — fleeing.")
+        -- warn("[Dungeon] In story battle — fleeing.")
         StoryUseSkill("Flee")
         task.wait(1)
     end

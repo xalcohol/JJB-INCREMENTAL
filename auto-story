@@ -497,17 +497,60 @@ local function ConfirmLoadoutInCombat(ctx)
     UpdateLoadoutLabels()
 end
 
-local function EnsureULFForStory()
-    if CurrentStyle == "ULF" then return end
-    -- warn("[Story] Style is not ULF — swapping.")
+-- ================================================================
+-- [[ LOADOUT ENFORCEMENT ]]
+-- ================================================================
+local function FleeAnyActiveBattle()
+    if IsInStoryBattle() then
+        StoryUseSkill("Flee")
+        task.wait(1)
+    elseif IsInDungeonBattle() then
+        TryFleeFromDungeon()
+        task.wait(0.5)
+    end
+end
+
+local function EnsureStyle(targetStyle)
+    if CurrentStyle == targetStyle then return end
+    FleeAnyActiveBattle()
     SwapStyle(1)
     local waited = 0
     while waited < 5 do
         task.wait(0.3); waited += 0.3
         DetectLoadoutFromInventory()
-        if CurrentStyle == "ULF" then return end
+        if CurrentStyle == targetStyle then return end
     end
-    -- warn("[Story] ULF swap timed out — proceeding.")
+end
+
+local function EnsureStand(targetStand)
+    if CurrentStand == targetStand then return end
+    FleeAnyActiveBattle()
+    SwapStand(1)
+    local waited = 0
+    while waited < 5 do
+        task.wait(0.3); waited += 0.3
+        DetectLoadoutFromInventory()
+        if CurrentStand == targetStand then return end
+    end
+end
+
+local function EnforceStoryLoadout()
+    FleeAnyActiveBattle()
+    DetectLoadoutFromInventory()
+    -- Prestige on: enforce TA4 + ULF
+    -- Prestige off: enforce ULF only, stand is free
+    if PrestigeEnabled then
+        EnsureStand("Tusk Act 4")
+    end
+    EnsureStyle("ULF")
+end
+
+local function EnforceDungeonLoadout()
+    -- Dungeon always enforces TA4 + ULF
+    FleeAnyActiveBattle()
+    DetectLoadoutFromInventory()
+    EnsureStand("Tusk Act 4")
+    EnsureStyle("ULF")
 end
 
 -- ================================================================
@@ -794,7 +837,6 @@ local function RunWorldBossScanner()
     -- Check immediately on start in case a boss is already available
     local engageText = GetEngageBtnText()
     if not engageText:find("ENGAGE BOSS") then
-        -- No boss up yet — wait for the timer
         WaitForBossTimer()
     end
 
@@ -931,8 +973,7 @@ end
 -- [[ AUTO STORY LOOP ]]
 -- ================================================================
 local function RunStoryLoop()
-    DetectLoadoutFromInventory()
-    EnsureULFForStory()
+    EnforceStoryLoadout()
     TryFleeFromDungeon()
     task.wait(0.5)
 
@@ -979,13 +1020,7 @@ end
 -- [[ AUTO DUNGEON LOOP ]]
 -- ================================================================
 local function RunDungeonLoop()
-    DetectLoadoutFromInventory()
-
-    if IsInStoryBattle() then
-        -- warn("[Dungeon] In story battle — fleeing.")
-        StoryUseSkill("Flee")
-        task.wait(1)
-    end
+    EnforceDungeonLoadout()
 
     while DungeonEnabled and not ScriptKilled do
         StartDungeon()

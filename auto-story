@@ -116,7 +116,7 @@ local INV_STAND_PATH = {
 local ENERGY_THRESHOLD  = 20
 local STAMINA_THRESHOLD = 20
 local HP_DANGER         = 0.30
-local HP_HEAL           = 0.74
+local HP_HEAL           = 0.67
 
 -- ================================================================
 -- [[ GUI ]]

@@ -829,6 +829,18 @@ local function RunWorldBossFight()
     PreBossStand = CurrentStand
     PreBossStyle = CurrentStyle
 
+    -- If KOU, swap to Shrine for optimal bleed stacking
+    -- (KOU has 10% passive burn chance making Melting Overdrive redundant)
+    if CurrentStand == "King of U" and CurrentStyle ~= "Shrine" then
+        SwapStyle(1)
+        local waited = 0
+        while waited < 5 do
+            task.wait(0.3); waited += 0.3
+            DetectLoadoutFromInventory()
+            if CurrentStyle == "Shrine" then break end
+        end
+    end
+
     -- warn(string.format("[WorldBoss] Engaging — %s + %s", CurrentStand, CurrentStyle))
 
     EngageWorldBoss()

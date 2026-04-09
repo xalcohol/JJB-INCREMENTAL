@@ -1,5 +1,5 @@
 -- // JJBI Auto Script
--- // Auto Story + Auto Dungeon | Mutually Exclusive | Kill-scriptable
+-- // Auto Story + Auto Dungeon + Auto World Boss | Kill-scriptable
 
 -- [[ KILL FLAG ]] --
 local ScriptKilled = false
@@ -16,26 +16,30 @@ local CombatAction       = Network:WaitForChild("CombatAction")
 local PrestigeEvent      = Network:WaitForChild("PrestigeEvent")
 local StandStorageAction = Network:WaitForChild("StandStorageAction")
 local DungeonAction      = Network:WaitForChild("DungeonAction")
+local WorldBossAction    = Network:WaitForChild("WorldBossAction")
 
 -- [[ TIMING ]] --
 local ACTION_CD = 0.2
 
 -- [[ FIRE HELPERS ]] --
-local function FirePrestige()  PrestigeEvent:FireServer()                         end
-local function SwapStyle(slot) StandStorageAction:FireServer("SwapStyle", slot)   end
-local function SwapStand(slot) StandStorageAction:FireServer("Swap", slot)        end
-local function StartDungeon()  DungeonAction:FireServer("StartDungeon", "Endless") end
+local function FirePrestige()    PrestigeEvent:FireServer()                          end
+local function SwapStyle(slot)   StandStorageAction:FireServer("SwapStyle", slot)    end
+local function SwapStand(slot)   StandStorageAction:FireServer("Swap", slot)         end
+local function StartDungeon()    DungeonAction:FireServer("StartDungeon", "Endless") end
+local function EngageWorldBoss() WorldBossAction:FireServer("Engage")                end
 
 local function StoryUseSkill(name)
     CombatAction:FireServer("Attack", { SkillName = name })
 end
-
 local function DungeonUseSkill(name)
     DungeonAction:FireServer("Attack", name)
 end
+local function WorldBossUseSkill(name)
+    WorldBossAction:FireServer("Attack", { SkillName = name })
+end
 
 -- ================================================================
--- [[ COMBAT CONTEXTS ]]
+-- [[ PATH HELPERS ]]
 -- ================================================================
 local function SafeGet(root, ...)
     local cur = root
@@ -55,9 +59,13 @@ local function ResolveRoot(pathStr)
     return node
 end
 
+-- ================================================================
+-- [[ COMBAT CONTEXTS ]]
+-- ================================================================
 local BASE         = "JJBIMenu.MainFrame.ContentContainer.SingleplayerFrame.MainPanel.InnerContent.ContentArea"
 local STORY_ROOT   = BASE .. ".StoryFrame.CombatMainFrame.ContentContainer"
 local DUNGEON_ROOT = BASE .. ".DungeonFrame.CombatMainFrame.ContentContainer"
+local WBOSS_ROOT   = BASE .. ".WorldBossFrame.CombatMainFrame.ContentContainer"
 
 local function MakeContext(rootPath, useSkillFn)
     return {
@@ -67,8 +75,9 @@ local function MakeContext(rootPath, useSkillFn)
     }
 end
 
-local StoryCtx   = MakeContext(STORY_ROOT,   StoryUseSkill)
-local DungeonCtx = MakeContext(DUNGEON_ROOT, DungeonUseSkill)
+local StoryCtx     = MakeContext(STORY_ROOT,   StoryUseSkill)
+local DungeonCtx   = MakeContext(DUNGEON_ROOT, DungeonUseSkill)
+local WorldBossCtx = MakeContext(WBOSS_ROOT,   WorldBossUseSkill)
 
 local DUNGEON_LOG_PATH = {
     "JJBIMenu","MainFrame","ContentContainer","SingleplayerFrame",
@@ -100,6 +109,14 @@ local INV_STAND_PATH = {
     "MainPanel","InnerContent","TabContainer","StandTabContent",
     "StandInfoCard","StandRow","Label"
 }
+
+-- ================================================================
+-- [[ RESOURCE THRESHOLDS ]]
+-- ================================================================
+local ENERGY_THRESHOLD  = 20
+local STAMINA_THRESHOLD = 20
+local HP_DANGER         = 0.30
+local HP_HEAL           = 0.80
 
 -- ================================================================
 -- [[ GUI ]]
@@ -139,7 +156,7 @@ do
 end
 
 local TitleLabel = Instance.new("TextLabel")
-TitleLabel.Size = UDim2.new(1, 0, 1, 0)
+TitleLabel.Size = UDim2.new(1,0,1,0)
 TitleLabel.BackgroundTransparency = 1
 TitleLabel.Text = "JJBI Auto"
 TitleLabel.TextColor3 = Color3.fromRGB(200,200,255)
@@ -202,7 +219,7 @@ end
 local StandLabel, StandSwapBtn = MakeInfoRow(3,  "Stand: ---", Color3.fromRGB(160,200,255))
 local StyleLabel, StyleSwapBtn = MakeInfoRow(28, "Style: ---", Color3.fromRGB(255,200,140))
 
--- Prestige glow banner
+-- Prestige glow
 local PrestigeGlow = Instance.new("Frame")
 PrestigeGlow.Name = "PrestigeGlow"
 PrestigeGlow.Size = UDim2.new(1, -20, 0, 14)
@@ -216,9 +233,9 @@ do
     local c = Instance.new("UICorner"); c.CornerRadius = UDim.new(0,4); c.Parent = PrestigeGlow
     local g = Instance.new("UIGradient")
     g.Color = ColorSequence.new({
-        ColorSequenceKeypoint.new(0,   Color3.fromRGB(220, 50,  50)),
-        ColorSequenceKeypoint.new(0.5, Color3.fromRGB(255, 100, 100)),
-        ColorSequenceKeypoint.new(1,   Color3.fromRGB(220, 50,  50)),
+        ColorSequenceKeypoint.new(0,   Color3.fromRGB(220,50,50)),
+        ColorSequenceKeypoint.new(0.5, Color3.fromRGB(255,100,100)),
+        ColorSequenceKeypoint.new(1,   Color3.fromRGB(220,50,50)),
     })
     g.Transparency = NumberSequence.new({
         NumberSequenceKeypoint.new(0,   0.3),
@@ -290,20 +307,23 @@ local function UnlockButton(btn) btn.Active = true;  RemoveDisabledOverlay(btn) 
 -- ================================================================
 -- [[ STATE ]]
 -- ================================================================
-local StoryEnabled    = false
-local DungeonEnabled  = false
-local PrestigeEnabled = false
-local CurrentStand    = "---"
-local CurrentStyle    = "---"
+local StoryEnabled      = false
+local DungeonEnabled    = false
+local PrestigeEnabled   = false
+local WorldBossPriority = false
+local CurrentStand      = "---"
+local CurrentStyle      = "---"
+local PreBossStand      = "---"
+local PreBossStyle      = "---"
 
 local function UpdatePrestigeVisuals()
     if PrestigeEnabled then
-        PrestigeBtn.BackgroundColor3 = Color3.fromRGB(120, 30, 30)
-        PrestigeBtn.TextColor3       = Color3.fromRGB(255, 150, 150)
+        PrestigeBtn.BackgroundColor3 = Color3.fromRGB(120,30,30)
+        PrestigeBtn.TextColor3       = Color3.fromRGB(255,150,150)
         PrestigeGlow.Visible         = true
     else
-        PrestigeBtn.BackgroundColor3 = Color3.fromRGB(40, 30, 30)
-        PrestigeBtn.TextColor3       = Color3.fromRGB(160, 80, 80)
+        PrestigeBtn.BackgroundColor3 = Color3.fromRGB(40,30,30)
+        PrestigeBtn.TextColor3       = Color3.fromRGB(160,80,80)
         PrestigeGlow.Visible         = false
     end
 end
@@ -334,19 +354,21 @@ local function TryFleeFromDungeon()
     local waited = 0
     while waited < 3 do
         if (logText.Text or ""):find("DUNGEON FLED!") then
-            warn("[Dungeon] Flee confirmed via LogText.")
+            warn("[Dungeon] Flee confirmed.")
             return true
         end
-        task.wait(0.2)
-        waited += 0.2
+        task.wait(0.2); waited += 0.2
     end
     return false
 end
 
-local function GetEnergy(ctx)
+local function GetResources(ctx)
     local label = SafeGet(ctx.Root(), "ResourceLabel")
-    if not label then return 0 end
-    return tonumber((label.Text or ""):match("ENERGY:%s*(%d+)")) or 0
+    if not label then return 0, 0 end
+    local text    = label.Text or ""
+    local energy  = tonumber(text:match("ENERGY:%s*(%d+)"))  or 0
+    local stamina = tonumber(text:match("STAMINA:%s*(%d+)")) or 0
+    return energy, stamina
 end
 
 local function GetHP(ctx)
@@ -388,20 +410,30 @@ local function FighterHasStatus(fighter, name)
     return GetStatusDuration(fighter, name) > 0
 end
 
-local function IsStunned(ctx)            return FighterHasStatus(GetPlayerFighter(ctx), "Stun")            end
-local function IsConfused(ctx)           return FighterHasStatus(GetPlayerFighter(ctx), "Confusion")        end
+local function IsPlayerIncapacitated(ctx)
+    local f = GetPlayerFighter(ctx)
+    return FighterHasStatus(f,"Stun") or FighterHasStatus(f,"Freeze")
+end
+
+local function IsConfused(ctx)
+    return FighterHasStatus(GetPlayerFighter(ctx),"Confusion")
+end
+
+local function PlayerHasStrengthBuff(ctx)
+    return FighterHasStatus(GetPlayerFighter(ctx),"Buff_Strength")
+end
+
 local function EnemyHasStatus(ctx, name) return FighterHasStatus(GetEnemyFighter(ctx), name)               end
-local function EnemyIsStunImmune(ctx)    return EnemyHasStatus(ctx, "StunImmunity")                        end
+local function EnemyIsStunImmune(ctx)    return EnemyHasStatus(ctx,"StunImmunity")                         end
+local function EnemyIsConfImmune(ctx)    return EnemyHasStatus(ctx,"ConfImmunity")                         end
 local function EnemyIsStunned(ctx)       return EnemyHasStatus(ctx,"Stun") or EnemyHasStatus(ctx,"Freeze") end
-local function EnemyIsPoisoned(ctx)      return EnemyHasStatus(ctx, "Poison")                              end
-local function EnemyIsBurning(ctx)       return EnemyHasStatus(ctx, "Burn")                                end
+local function EnemyIsConfused(ctx)      return EnemyHasStatus(ctx,"Confusion")                            end
+local function EnemyIsPoisoned(ctx)      return EnemyHasStatus(ctx,"Poison")                               end
+local function EnemyIsBurning(ctx)       return EnemyHasStatus(ctx,"Burn")                                 end
+local function EnemyIsBleeding(ctx)      return EnemyHasStatus(ctx,"Bleed")                                end
 
 -- ================================================================
 -- [[ MOVESET — live scan per tick ]]
--- Walks AbilitiesArea fresh every CanUse call.
--- Strips "(N)" suffix to get base name, checks if it matches.
--- On cooldown = button name still has "(N)" = CanUse returns false.
--- No cache, nothing ever stale.
 -- ================================================================
 local function GetMoveButton(ctx, skillName)
     local area = SafeGet(ctx.Root(), "AbilitiesArea")
@@ -418,7 +450,6 @@ end
 local function CanUse(ctx, skillName)
     local btn = GetMoveButton(ctx, skillName)
     if not btn then return false end
-    -- If current name still has (N) it's on cooldown
     return not btn.Name:match("%(%d+%)")
 end
 
@@ -450,7 +481,7 @@ local function DetectLoadoutFromInventory()
         else                             CurrentStand = "Unknown" end
     end
     UpdateLoadoutLabels()
-    print(string.format("[AutoJJBI] Loadout — Stand: %s | Style: %s", CurrentStand, CurrentStyle))
+    -- print(string.format("[AutoJJBI] Loadout — Stand: %s | Style: %s", CurrentStand, CurrentStyle))
 end
 
 local function ConfirmLoadoutInCombat(ctx)
@@ -470,72 +501,221 @@ local function ConfirmLoadoutInCombat(ctx)
     UpdateLoadoutLabels()
 end
 
--- ================================================================
--- [[ COMBAT DECISION ENGINE ]]
--- ================================================================
-local HP_DANGER = 0.30
-local HP_HEAL   = 0.70
+local function EnsureULFForStory()
+    if CurrentStyle == "ULF" then return end
+    warn("[Story] Style is not ULF — swapping.")
+    SwapStyle(1)
+    local waited = 0
+    while waited < 5 do
+        task.wait(0.3); waited += 0.3
+        DetectLoadoutFromInventory()
+        if CurrentStyle == "ULF" then return end
+    end
+    warn("[Story] ULF swap timed out — proceeding.")
+end
 
+-- ================================================================
+-- [[ COMBAT DECISION ENGINE (Story + Dungeon) ]]
+-- ================================================================
 local function RunCombatTick(ctx)
-    local _, _, hpPct = GetHP(ctx)
-    local energy      = GetEnergy(ctx)
+    local _, _, hpPct     = GetHP(ctx)
+    local energy, stamina = GetResources(ctx)
 
-    if IsStunned(ctx) then
-        UseSkill(ctx, "Rest"); return
-    end
-
-    if IsConfused(ctx) then
-        UseSkill(ctx, "Rest"); return
-    end
+    if IsPlayerIncapacitated(ctx) then UseSkill(ctx,"Rest"); return end
+    if IsConfused(ctx)            then UseSkill(ctx,"Rest"); return end
 
     if hpPct < HP_DANGER then
-        if     CanUse(ctx, "Instant Reformation") then UseSkill(ctx, "Instant Reformation")
-        elseif CanUse(ctx, "Block")               then UseSkill(ctx, "Block")
-        else                                           UseSkill(ctx, "Rest")
+        if     CanUse(ctx,"Instant Reformation") then UseSkill(ctx,"Instant Reformation")
+        elseif CanUse(ctx,"Block")               then UseSkill(ctx,"Block")
+        else                                          UseSkill(ctx,"Rest")
         end
         return
     end
 
     if hpPct < HP_HEAL then
-        if CanUse(ctx, "Instant Reformation") then
+        if CanUse(ctx,"Instant Reformation") then
             ctx.HasBlockedThisDip = false
-            UseSkill(ctx, "Instant Reformation")
-            return
+            UseSkill(ctx,"Instant Reformation"); return
         end
         if not ctx.HasBlockedThisDip then
             ctx.HasBlockedThisDip = true
-            if CanUse(ctx, "Block") then
-                UseSkill(ctx, "Block")
-                return
-            end
+            if CanUse(ctx,"Block") then UseSkill(ctx,"Block"); return end
         end
     else
         ctx.HasBlockedThisDip = false
     end
 
-    if CanUse(ctx, "Golden Spin") then
+    local hasEnergy  = energy  >= ENERGY_THRESHOLD
+    local hasStamina = stamina >= STAMINA_THRESHOLD
+
+    if not hasEnergy and not hasStamina then UseSkill(ctx,"Rest"); return end
+
+    if hasEnergy and CanUse(ctx,"Illusory Presence") then
+        if not EnemyIsConfImmune(ctx) and not EnemyIsConfused(ctx) then
+            UseSkill(ctx,"Illusory Presence"); return
+        end
+    end
+
+    if hasEnergy and CanUse(ctx,"Dimensional Slash") then
+        if not EnemyIsBleeding(ctx) then
+            UseSkill(ctx,"Dimensional Slash"); return
+        end
+    end
+
+    if hasEnergy and CanUse(ctx,"Rain of Debris") then
+        UseSkill(ctx,"Rain of Debris"); return
+    end
+
+    if hasEnergy and CanUse(ctx,"Golden Spin") then
         if not EnemyIsStunImmune(ctx) and not EnemyIsStunned(ctx) then
-            UseSkill(ctx, "Golden Spin"); return
+            UseSkill(ctx,"Golden Spin"); return
         end
     end
 
-    if CanUse(ctx, "Cellular Destruction") then
+    if hasEnergy and CanUse(ctx,"Cellular Destruction") then
         if not EnemyIsPoisoned(ctx) then
-            UseSkill(ctx, "Cellular Destruction"); return
+            UseSkill(ctx,"Cellular Destruction"); return
         end
     end
 
-    if CanUse(ctx, "Melting Overdrive") then
+    if hasStamina and CanUse(ctx,"Melting Overdrive") then
         if not EnemyIsBurning(ctx) then
-            UseSkill(ctx, "Melting Overdrive"); return
+            UseSkill(ctx,"Melting Overdrive"); return
         end
     end
 
-    if energy >= 15 and CanUse(ctx, "Infinite Rotation") then
-        UseSkill(ctx, "Infinite Rotation"); return
+    if hasEnergy and CanUse(ctx,"Infinite Rotation") then
+        UseSkill(ctx,"Infinite Rotation"); return
+    end
+    if hasEnergy and CanUse(ctx,"Raging Demon") then
+        UseSkill(ctx,"Raging Demon"); return
     end
 
-    UseSkill(ctx, "Rest")
+    if not hasEnergy and hasStamina then
+        if CanUse(ctx,"Melting Overdrive") then UseSkill(ctx,"Melting Overdrive"); return end
+        UseSkill(ctx,"Rest"); return
+    end
+    if hasEnergy and not hasStamina then
+        if     CanUse(ctx,"Infinite Rotation") then UseSkill(ctx,"Infinite Rotation"); return
+        elseif CanUse(ctx,"Raging Demon")      then UseSkill(ctx,"Raging Demon");      return
+        else                                        UseSkill(ctx,"Rest");               return
+        end
+    end
+
+    UseSkill(ctx,"Rest")
+end
+
+-- ================================================================
+-- [[ WORLD BOSS COMBAT TICK ]]
+-- ================================================================
+local function RunWorldBossTick()
+    local ctx             = WorldBossCtx
+    local _, _, hpPct     = GetHP(ctx)
+    local energy, stamina = GetResources(ctx)
+
+    if IsPlayerIncapacitated(ctx) then UseSkill(ctx,"Rest"); return end
+    if IsConfused(ctx)            then UseSkill(ctx,"Rest"); return end
+
+    if hpPct < HP_DANGER then
+        if     CanUse(ctx,"Instant Reformation") then UseSkill(ctx,"Instant Reformation")
+        elseif CanUse(ctx,"Block")               then UseSkill(ctx,"Block")
+        else                                          UseSkill(ctx,"Rest")
+        end
+        return
+    end
+
+    if hpPct < HP_HEAL then
+        if CanUse(ctx,"Instant Reformation") then
+            ctx.HasBlockedThisDip = false
+            UseSkill(ctx,"Instant Reformation"); return
+        end
+        if not ctx.HasBlockedThisDip then
+            ctx.HasBlockedThisDip = true
+            if CanUse(ctx,"Block") then UseSkill(ctx,"Block"); return end
+        end
+    else
+        ctx.HasBlockedThisDip = false
+    end
+
+    local hasEnergy  = energy  >= ENERGY_THRESHOLD
+    local hasStamina = stamina >= STAMINA_THRESHOLD
+
+    if not hasEnergy and not hasStamina then UseSkill(ctx,"Rest"); return end
+
+    -- CC first: TA4 Golden Spin -> KOU Illusory Presence
+    if hasEnergy and CanUse(ctx,"Golden Spin") then
+        if not EnemyIsStunImmune(ctx) and not EnemyIsStunned(ctx) then
+            UseSkill(ctx,"Golden Spin"); return
+        end
+    end
+
+    if hasEnergy and CanUse(ctx,"Illusory Presence") then
+        if not EnemyIsConfImmune(ctx) and not EnemyIsConfused(ctx) then
+            UseSkill(ctx,"Illusory Presence"); return
+        end
+    end
+
+    -- DoT stacking
+    if hasEnergy and CanUse(ctx,"Cellular Destruction") then
+        if not EnemyIsPoisoned(ctx) then
+            UseSkill(ctx,"Cellular Destruction"); return
+        end
+    end
+
+    if hasEnergy and CanUse(ctx,"Rain of Debris") then
+        UseSkill(ctx,"Rain of Debris"); return
+    end
+
+    -- Bleed: Dimensional Slash or Malevolent Shrine (interchangeable)
+    if hasEnergy and CanUse(ctx,"Dimensional Slash") then
+        if not EnemyIsBleeding(ctx) then
+            UseSkill(ctx,"Dimensional Slash"); return
+        end
+    end
+
+    if hasStamina and CanUse(ctx,"Malevolent Shrine") then
+        if not EnemyIsBleeding(ctx) then
+            UseSkill(ctx,"Malevolent Shrine"); return
+        end
+    end
+
+    -- Burn
+    if hasStamina and CanUse(ctx,"Melting Overdrive") then
+        if not EnemyIsBurning(ctx) then
+            UseSkill(ctx,"Melting Overdrive"); return
+        end
+    end
+
+    -- Absolute Energy — after all CC/DoT placed, pre-damage buff
+    if hasEnergy and CanUse(ctx,"Absolute Energy") then
+        if not PlayerHasStrengthBuff(ctx) then
+            UseSkill(ctx,"Absolute Energy"); return
+        end
+    end
+
+    -- Standard damage
+    if hasEnergy and CanUse(ctx,"Infinite Rotation") then
+        UseSkill(ctx,"Infinite Rotation"); return
+    end
+    if hasEnergy and CanUse(ctx,"Raging Demon") then
+        UseSkill(ctx,"Raging Demon"); return
+    end
+
+    -- Resource fallbacks
+    if not hasEnergy and hasStamina then
+        if     CanUse(ctx,"Melting Overdrive")  then UseSkill(ctx,"Melting Overdrive");  return
+        elseif CanUse(ctx,"Malevolent Shrine")  then UseSkill(ctx,"Malevolent Shrine");  return
+        else                                         UseSkill(ctx,"Rest");               return
+        end
+    end
+    if hasEnergy and not hasStamina then
+        if     CanUse(ctx,"Infinite Rotation") then UseSkill(ctx,"Infinite Rotation"); return
+        elseif CanUse(ctx,"Raging Demon")      then UseSkill(ctx,"Raging Demon");      return
+        else                                        UseSkill(ctx,"Rest");              return
+        end
+    end
+
+    UseSkill(ctx,"Rest")
 end
 
 -- ================================================================
@@ -550,6 +730,202 @@ local function RunBattleLoop(ctx, enabledFlag, inBattleFn)
         task.wait(ACTION_CD)
     end
     ctx.HasBlockedThisDip = false
+end
+
+-- ================================================================
+-- [[ WORLD BOSS HELPERS ]]
+-- ================================================================
+local function ParseTimerLabel()
+    local label = SafeGet(PlayerGui,
+        "JJBIMenu","MainFrame","ContentContainer","SingleplayerFrame",
+        "MainPanel","InnerContent","ContentArea","WorldBossFrame",
+        "MenuContainer","InfoCard","TimerLabel"
+    )
+    if not label then return nil end
+    local mins, secs = (label.Text or ""):match("(%d+):(%d+)")
+    if not mins then return nil end
+    return tonumber(mins) * 60 + tonumber(secs)
+end
+
+local function GetEngageBtnText()
+    local btn = SafeGet(PlayerGui,
+        "JJBIMenu","MainFrame","ContentContainer","SingleplayerFrame",
+        "MainPanel","InnerContent","ContentArea","WorldBossFrame",
+        "MenuContainer","InfoCard","EngageBtn"
+    )
+    return btn and (btn.Text or "") or ""
+end
+
+local function GetBossNameText()
+    local lbl = SafeGet(PlayerGui,
+        "JJBIMenu","MainFrame","ContentContainer","SingleplayerFrame",
+        "MainPanel","InnerContent","ContentArea","WorldBossFrame",
+        "MenuContainer","InfoCard","BossNameLabel"
+    )
+    return lbl and (lbl.Text or "") or ""
+end
+
+-- Smart timer wait — reads timer and sleeps in stages:
+-- > 30min  → sleep 30min → re-read → fall into 10min checks
+-- > 10min  → sleep 10min → re-read → repeat until ≤ 10min
+-- ≤ 10min  → sleep exact duration → return (boss window imminent)
+local function WaitForBossTimer()
+    while StoryEnabled and not ScriptKilled do
+        local secs = ParseTimerLabel()
+
+        if not secs or secs <= 0 then
+            -- Timer gone or zero — boss window likely active
+            return
+        end
+
+        if secs > 30 * 60 then
+            -- Sleep 30min then re-read to drop into 10min checks
+            warn(string.format("[WorldBoss] Timer %ds (>30min) — sleeping 30min then rechecking.", secs))
+            local elapsed = 0
+            while elapsed < 1800 and StoryEnabled and not ScriptKilled do
+                task.wait(1); elapsed += 1
+            end
+            -- Loop back to re-read timer
+
+        elseif secs > 10 * 60 then
+            -- Sleep 10min then re-read
+            warn(string.format("[WorldBoss] Timer %ds (>10min) — sleeping 10min then rechecking.", secs))
+            local elapsed = 0
+            while elapsed < 600 and StoryEnabled and not ScriptKilled do
+                task.wait(1); elapsed += 1
+            end
+            -- Loop back to re-read timer
+
+        else
+            -- ≤ 10min — wait the exact remaining time then return
+            warn(string.format("[WorldBoss] Timer %ds (≤10min) — waiting exact duration.", secs))
+            local elapsed = 0
+            while elapsed < secs and StoryEnabled and not ScriptKilled do
+                task.wait(1); elapsed += 1
+            end
+            return
+        end
+    end
+end
+
+-- ================================================================
+-- [[ WORLD BOSS SCANNER ]]
+-- Parallel loop while StoryEnabled — no stacking, clean scheduling
+-- ================================================================
+local function RunWorldBossScanner()
+    -- Initial wait on story toggle
+    WaitForBossTimer()
+
+    while StoryEnabled and not ScriptKilled do
+        local engageText = GetEngageBtnText()
+
+        if engageText:find("ENGAGE BOSS") then
+            -- Boss available — set priority and wait for fight to complete
+            warn("[WorldBoss] Boss available — flagging priority.")
+            WorldBossPriority = true
+            while WorldBossPriority and StoryEnabled and not ScriptKilled do
+                task.wait(1)
+            end
+            -- Fight done — wait 10s then re-read timer for next cycle
+            task.wait(10)
+            WaitForBossTimer()
+
+        elseif engageText:find("ALREADY FOUGHT") then
+            -- Already fought — re-read timer for next spawn
+            warn("[WorldBoss] Already fought this cycle.")
+            task.wait(5)
+            WaitForBossTimer()
+
+        else
+            -- WAITING / UNKNOWN THREAT — re-read timer
+            task.wait(5)
+            WaitForBossTimer()
+        end
+    end
+end
+
+-- ================================================================
+-- [[ WORLD BOSS FIGHT ROUTINE ]]
+-- ================================================================
+local function RunWorldBossFight()
+    PreBossStand = CurrentStand
+    PreBossStyle = CurrentStyle
+
+    warn(string.format("[WorldBoss] Engaging — %s + %s", CurrentStand, CurrentStyle))
+
+    EngageWorldBoss()
+
+    -- Wait for TurnLabel to confirm fight started
+    local turnLabel = SafeGet(PlayerGui,
+        "JJBIMenu","MainFrame","ContentContainer","SingleplayerFrame",
+        "MainPanel","InnerContent","ContentArea","WorldBossFrame",
+        "CombatMainFrame","TurnLabel"
+    )
+
+    local waited       = 0
+    local fightStarted = false
+    while waited < 8 and not ScriptKilled do
+        task.wait(0.3); waited += 0.3
+        if turnLabel and (turnLabel.Text or ""):find("Turns Remaining: 10/10") then
+            fightStarted = true
+            break
+        end
+    end
+
+    if not fightStarted then
+        warn("[WorldBoss] Fight start unconfirmed — firing fallback attack.")
+        WorldBossUseSkill("Infinite Rotation")
+        task.wait(1)
+    end
+
+    -- Log path for completion detection
+    local logText = SafeGet(PlayerGui,
+        "JJBIMenu","MainFrame","ContentContainer","SingleplayerFrame",
+        "MainPanel","InnerContent","ContentArea","WorldBossFrame",
+        "CombatMainFrame","ContentContainer","ChatboxArea","ChatScroll","LogText"
+    )
+
+    WorldBossCtx.HasBlockedThisDip = false
+    task.wait(0.5)
+    ConfirmLoadoutInCombat(WorldBossCtx)
+
+    -- Combat loop — exits on log completion or 120s safety ceiling
+    local elapsed  = 0
+    local finished = false
+
+    while elapsed < 120 and not ScriptKilled do
+        if logText then
+            local log = logText.Text or ""
+            if log:find("Damage Dealt:") or log:find("Loot Secured") then
+                finished = true
+                break
+            end
+        end
+        RunWorldBossTick()
+        task.wait(ACTION_CD)
+        elapsed += ACTION_CD
+    end
+
+    WorldBossCtx.HasBlockedThisDip = false
+
+    if finished then
+        warn("[WorldBoss] Fight complete — resuming story.")
+    else
+        warn("[WorldBoss] Fight timed out — resuming story.")
+    end
+
+    -- Restore pre-boss loadout if anything was swapped
+    if CurrentStyle ~= PreBossStyle then
+        SwapStyle(1); task.wait(0.5)
+    end
+    if CurrentStand ~= PreBossStand then
+        SwapStand(1); task.wait(0.5)
+    end
+    if CurrentStyle ~= PreBossStyle or CurrentStand ~= PreBossStand then
+        DetectLoadoutFromInventory()
+    end
+
+    WorldBossPriority = false
 end
 
 -- ================================================================
@@ -576,6 +952,7 @@ end
 -- ================================================================
 local function RunStoryLoop()
     DetectLoadoutFromInventory()
+    EnsureULFForStory()
     TryFleeFromDungeon()
     task.wait(0.5)
 
@@ -590,17 +967,33 @@ local function RunStoryLoop()
         task.wait(ACTION_CD)
     end
 
+    -- World boss scanner runs in parallel while story is on
+    task.spawn(RunWorldBossScanner)
+
     while StoryEnabled and not ScriptKilled do
-        if PrestigeEnabled and IsBokuNoRhythm() then
-            warn("[Story] Boku no Rhythm reached — Prestiging.")
+
+        -- World boss takes priority — finish current battle first
+        if WorldBossPriority then
+            warn("[Story] World boss priority — finishing open battle first.")
+            if IsInStoryBattle() then
+                RunBattleLoop(StoryCtx, function() return StoryEnabled end, IsInStoryBattle)
+                task.wait(ACTION_CD)
+            end
+            RunWorldBossFight()
+            task.wait(ACTION_CD)
+
+        elseif PrestigeEnabled and IsBokuNoRhythm() then
+            warn("[Story] Boku no Rhythm — Prestiging.")
             TryPrestige()
             task.wait(ACTION_CD)
+
         else
             CombatAction:FireServer("EngageStory")
             task.wait(ACTION_CD)
             RunBattleLoop(StoryCtx, function() return StoryEnabled end, IsInStoryBattle)
             task.wait(ACTION_CD)
         end
+
         task.wait(ACTION_CD)
     end
 end
@@ -612,7 +1005,7 @@ local function RunDungeonLoop()
     DetectLoadoutFromInventory()
 
     if IsInStoryBattle() then
-        warn("[Dungeon] In story battle on switch — fleeing.")
+        warn("[Dungeon] In story battle — fleeing.")
         StoryUseSkill("Flee")
         task.wait(1)
     end
@@ -622,8 +1015,7 @@ local function RunDungeonLoop()
         task.wait(ACTION_CD)
         local waited = 0
         while not IsInDungeonBattle() and waited < 5 do
-            task.wait(0.2)
-            waited += 0.2
+            task.wait(0.2); waited += 0.2
         end
         if IsInDungeonBattle() then
             RunBattleLoop(DungeonCtx, function() return DungeonEnabled end, IsInDungeonBattle)
@@ -650,6 +1042,8 @@ StoryBtn.MouseButton1Click:Connect(function()
         LockButton(DungeonBtn)
         task.spawn(RunStoryLoop)
     else
+        StoryEnabled      = false
+        WorldBossPriority = false
         StoryBtn.Text = "Auto Story"
         StoryBtn.BackgroundColor3 = Color3.fromRGB(45,45,70)
         StoryBtn.TextColor3 = Color3.fromRGB(180,180,255)
@@ -676,37 +1070,28 @@ end)
 
 StandSwapBtn.MouseButton1Click:Connect(function()
     if IsInStoryBattle() then
-        warn("[Swap] In story battle — fleeing before swap.")
-        StoryUseSkill("Flee")
-        task.wait(1)
+        StoryUseSkill("Flee"); task.wait(1)
     elseif IsInDungeonBattle() then
-        warn("[Swap] Possible dungeon battle — attempting flee.")
-        TryFleeFromDungeon()
-        task.wait(0.5)
+        TryFleeFromDungeon(); task.wait(0.5)
     end
-    SwapStand(1)
-    task.wait(0.3)
+    SwapStand(1); task.wait(0.3)
     DetectLoadoutFromInventory()
 end)
 
 StyleSwapBtn.MouseButton1Click:Connect(function()
     if IsInStoryBattle() then
-        warn("[Swap] In story battle — fleeing before swap.")
-        StoryUseSkill("Flee")
-        task.wait(1)
+        StoryUseSkill("Flee"); task.wait(1)
     elseif IsInDungeonBattle() then
-        warn("[Swap] Possible dungeon battle — attempting flee.")
-        TryFleeFromDungeon()
-        task.wait(0.5)
+        TryFleeFromDungeon(); task.wait(0.5)
     end
-    SwapStyle(1)
-    task.wait(0.3)
+    SwapStyle(1); task.wait(0.3)
     DetectLoadoutFromInventory()
 end)
 
 KillBtn.MouseButton1Click:Connect(function()
-    StoryEnabled   = false
-    DungeonEnabled = false
+    StoryEnabled      = false
+    DungeonEnabled    = false
+    WorldBossPriority = false
     KillScript()
     task.wait(ACTION_CD)
     ScreenGui:Destroy()
@@ -717,4 +1102,4 @@ end)
 -- ================================================================
 task.spawn(DetectLoadoutFromInventory)
 
-print("[AutoJJBI] Script loaded. GUI ready.")
+-- print("[AutoJJBI] Script loaded. GUI ready.")

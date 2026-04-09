@@ -354,7 +354,7 @@ local function TryFleeFromDungeon()
     local waited = 0
     while waited < 3 do
         if (logText.Text or ""):find("DUNGEON FLED!") then
-            warn("[Dungeon] Flee confirmed.")
+            --warn("[Dungeon] Flee confirmed.")
             return true
         end
         task.wait(0.2); waited += 0.2
@@ -503,7 +503,7 @@ end
 
 local function EnsureULFForStory()
     if CurrentStyle == "ULF" then return end
-    warn("[Story] Style is not ULF — swapping.")
+    --warn("[Story] Style is not ULF — swapping.")
     SwapStyle(1)
     local waited = 0
     while waited < 5 do
@@ -511,7 +511,7 @@ local function EnsureULFForStory()
         DetectLoadoutFromInventory()
         if CurrentStyle == "ULF" then return end
     end
-    warn("[Story] ULF swap timed out — proceeding.")
+    --warn("[Story] ULF swap timed out — proceeding.")
 end
 
 -- ================================================================
@@ -780,7 +780,7 @@ local function WaitForBossTimer()
 
         if secs > 30 * 60 then
             -- Sleep 30min then re-read to drop into 10min checks
-            warn(string.format("[WorldBoss] Timer %ds (>30min) — sleeping 30min then rechecking.", secs))
+            --warn(string.format("[WorldBoss] Timer %ds (>30min) — sleeping 30min then rechecking.", secs))
             local elapsed = 0
             while elapsed < 1800 and StoryEnabled and not ScriptKilled do
                 task.wait(1); elapsed += 1
@@ -789,7 +789,7 @@ local function WaitForBossTimer()
 
         elseif secs > 10 * 60 then
             -- Sleep 10min then re-read
-            warn(string.format("[WorldBoss] Timer %ds (>10min) — sleeping 10min then rechecking.", secs))
+            --warn(string.format("[WorldBoss] Timer %ds (>10min) — sleeping 10min then rechecking.", secs))
             local elapsed = 0
             while elapsed < 600 and StoryEnabled and not ScriptKilled do
                 task.wait(1); elapsed += 1
@@ -798,7 +798,7 @@ local function WaitForBossTimer()
 
         else
             -- ≤ 10min — wait the exact remaining time then return
-            warn(string.format("[WorldBoss] Timer %ds (≤10min) — waiting exact duration.", secs))
+            --warn(string.format("[WorldBoss] Timer %ds (≤10min) — waiting exact duration.", secs))
             local elapsed = 0
             while elapsed < secs and StoryEnabled and not ScriptKilled do
                 task.wait(1); elapsed += 1
@@ -821,7 +821,7 @@ local function RunWorldBossScanner()
 
         if engageText:find("ENGAGE BOSS") then
             -- Boss available — set priority and wait for fight to complete
-            warn("[WorldBoss] Boss available — flagging priority.")
+            --warn("[WorldBoss] Boss available — flagging priority.")
             WorldBossPriority = true
             while WorldBossPriority and StoryEnabled and not ScriptKilled do
                 task.wait(1)
@@ -832,7 +832,7 @@ local function RunWorldBossScanner()
 
         elseif engageText:find("ALREADY FOUGHT") then
             -- Already fought — re-read timer for next spawn
-            warn("[WorldBoss] Already fought this cycle.")
+            --warn("[WorldBoss] Already fought this cycle.")
             task.wait(5)
             WaitForBossTimer()
 
@@ -851,7 +851,7 @@ local function RunWorldBossFight()
     PreBossStand = CurrentStand
     PreBossStyle = CurrentStyle
 
-    warn(string.format("[WorldBoss] Engaging — %s + %s", CurrentStand, CurrentStyle))
+    --warn(string.format("[WorldBoss] Engaging — %s + %s", CurrentStand, CurrentStyle))
 
     EngageWorldBoss()
 
@@ -873,7 +873,7 @@ local function RunWorldBossFight()
     end
 
     if not fightStarted then
-        warn("[WorldBoss] Fight start unconfirmed — firing fallback attack.")
+        --warn("[WorldBoss] Fight start unconfirmed — firing fallback attack.")
         WorldBossUseSkill("Infinite Rotation")
         task.wait(1)
     end
@@ -909,9 +909,9 @@ local function RunWorldBossFight()
     WorldBossCtx.HasBlockedThisDip = false
 
     if finished then
-        warn("[WorldBoss] Fight complete — resuming story.")
+        --warn("[WorldBoss] Fight complete — resuming story.")
     else
-        warn("[WorldBoss] Fight timed out — resuming story.")
+        --warn("[WorldBoss] Fight timed out — resuming story.")
     end
 
     -- Restore pre-boss loadout if anything was swapped
@@ -957,7 +957,7 @@ local function RunStoryLoop()
     task.wait(0.5)
 
     if IsInStoryBattle() then
-        warn("[Story] Already in story battle — finishing first.")
+        --warn("[Story] Already in story battle — finishing first.")
         RunBattleLoop(StoryCtx, function() return StoryEnabled end, IsInStoryBattle)
         task.wait(ACTION_CD)
     end
@@ -974,7 +974,7 @@ local function RunStoryLoop()
 
         -- World boss takes priority — finish current battle first
         if WorldBossPriority then
-            warn("[Story] World boss priority — finishing open battle first.")
+            --warn("[Story] World boss priority — finishing open battle first.")
             if IsInStoryBattle() then
                 RunBattleLoop(StoryCtx, function() return StoryEnabled end, IsInStoryBattle)
                 task.wait(ACTION_CD)
@@ -983,7 +983,7 @@ local function RunStoryLoop()
             task.wait(ACTION_CD)
 
         elseif PrestigeEnabled and IsBokuNoRhythm() then
-            warn("[Story] Boku no Rhythm — Prestiging.")
+            --warn("[Story] Boku no Rhythm — Prestiging.")
             TryPrestige()
             task.wait(ACTION_CD)
 
@@ -1005,7 +1005,7 @@ local function RunDungeonLoop()
     DetectLoadoutFromInventory()
 
     if IsInStoryBattle() then
-        warn("[Dungeon] In story battle — fleeing.")
+        --warn("[Dungeon] In story battle — fleeing.")
         StoryUseSkill("Flee")
         task.wait(1)
     end

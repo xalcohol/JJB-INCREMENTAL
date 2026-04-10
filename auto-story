@@ -24,7 +24,6 @@ local ACTION_CD = 0.2
 -- [[ FIRE HELPERS ]] --
 local function FirePrestige()    PrestigeEvent:FireServer()                          end
 local function SwapStyle(slot)   StandStorageAction:FireServer("SwapStyle", slot)    end
-local function SwapStand(slot)   StandStorageAction:FireServer("Swap", slot)         end
 local function StartDungeon()    DungeonAction:FireServer("StartDungeon", "Endless") end
 local function EngageWorldBoss() WorldBossAction:FireServer("Engage")                end
 
@@ -85,6 +84,107 @@ local DUNGEON_LOG_PATH = {
     "CombatMainFrame","ContentContainer","ChatboxArea","ChatScroll","LogText"
 }
 
+local STAND_STORAGE_PATH = {
+    "JJBIMenu","MainFrame","ContentContainer","InventoryFrame",
+    "MainPanel","InnerContent","TabContainer","StandTabContent",
+    "StandMidRow","StandStorageCard","StorageContainer"
+}
+
+-- ================================================================
+-- [[ STAND NAME FORMATTING ]]
+-- Two formats:
+--   Dropdown  -> full name, full trait brackets e.g. "Tusk Act 4 [LETHAL] [OVERWHELMING]"
+--   Stand label -> short name, initial traits e.g. "Tusk Act 4 [L+O]" / "KCR [F]"
+-- ================================================================
+local function StripRichText(text)
+    local clean = text:gsub("<[^>]+>", "")
+    clean = clean:gsub("%s+", " ")
+    return clean:match("^%s*(.-)%s*$")
+end
+
+local function StripSlotPrefix(name)
+    return name:match("^S%d+:%s*(.+)$") or name
+end
+
+-- Full name for dropdown — strips slot prefix, keeps full [TRAIT] brackets
+local function FormatDropdownName(rawText)
+    local clean = StripRichText(rawText)
+    clean = StripSlotPrefix(clean)
+    return clean:match("^%s*(.-)%s*$")
+end
+
+-- Short name for Stand: label — abbreviated stand + initial traits
+local STAND_ABBREV = {
+    ["King Crimson Requiem"] = "KCR",
+    ["Tusk Act 4"]           = "Tusk Act 4",
+    ["King of U"]            = "King of U",
+}
+
+local function FormatStandLabel(rawText)
+    local clean = StripRichText(rawText)
+    clean = StripSlotPrefix(clean)
+    clean = clean:match("^%s*(.-)%s*$")
+
+    -- Collect trait initials from brackets
+    local traits = {}
+    for trait in clean:gmatch("%[([A-Z]+)%]") do
+        table.insert(traits, trait:sub(1,1))
+    end
+
+    -- Strip all bracket groups and connectors to get base name
+    local base = clean:gsub("%s*%[%u+%]", ""):gsub("%s*&%s*", ""):match("^%s*(.-)%s*$")
+
+    -- Apply abbreviations
+    for full, short in pairs(STAND_ABBREV) do
+        if base:find(full, 1, true) then
+            base = short
+            break
+        end
+    end
+
+    if #traits > 0 then
+        return base .. " [" .. table.concat(traits, "+") .. "]"
+    end
+    return base
+end
+
+-- ================================================================
+-- [[ STAND SLOT SCANNER ]]
+-- Child 1 = StorageSlotTemplate = Swap 1 (no offset)
+-- Child 2 = UIListLayout (skipped, not a Frame)
+-- Child 3+ = StorageSlotTemplate = Swap (i - 1)
+-- ================================================================
+local function ScanStandSlots()
+    local container = SafeGet(PlayerGui, table.unpack(STAND_STORAGE_PATH))
+    if not container then return {} end
+
+    local slots = {}
+
+    for i, child in ipairs(container:GetChildren()) do
+        if child:IsA("Frame") then
+            local nameLabel = child:FindFirstChild("NameLabel")
+            local rawText = nameLabel and (nameLabel.Text or "") or ""
+            local name = FormatDropdownName(rawText)
+            if name ~= "" and not name:find("Locked") and not name:find("^%s*$") then
+                local swapNum = i == 1 and 1 or i - 1
+                table.insert(slots, { name = name, slot = swapNum, raw = rawText })
+            end
+        end
+    end
+
+    return slots
+end
+
+local function FindStandSlot(targetName)
+    local slots = ScanStandSlots()
+    for _, entry in ipairs(slots) do
+        if entry.name:find(targetName) then
+            return entry.slot
+        end
+    end
+    return nil
+end
+
 -- ================================================================
 -- [[ LOADOUT DEFINITIONS ]]
 -- ================================================================
@@ -116,7 +216,7 @@ local INV_STAND_PATH = {
 local ENERGY_THRESHOLD  = 20
 local STAMINA_THRESHOLD = 20
 local HP_DANGER         = 0.30
-local HP_HEAL           = 0.67
+local HP_HEAL           = 0.74
 
 -- ================================================================
 -- [[ GUI ]]
@@ -187,6 +287,27 @@ InfoStrip.BorderSizePixel = 0
 InfoStrip.Parent = MainFrame
 do local c = Instance.new("UICorner"); c.CornerRadius = UDim.new(0,5); c.Parent = InfoStrip end
 
+-- Stand dropdown panel — offset 4px from top so it doesn't hug the strip border
+local StandDropdown = Instance.new("Frame")
+StandDropdown.Name = "StandDropdown"
+StandDropdown.Size = UDim2.new(0, 160, 0, 0)
+StandDropdown.Position = UDim2.new(1, 6, 0, 4)
+StandDropdown.BackgroundColor3 = Color3.fromRGB(22, 22, 32)
+StandDropdown.BorderSizePixel = 0
+StandDropdown.Visible = false
+StandDropdown.ZIndex = 10
+StandDropdown.ClipsDescendants = true
+StandDropdown.Parent = InfoStrip
+do
+    local c = Instance.new("UICorner"); c.CornerRadius = UDim.new(0,6); c.Parent = StandDropdown
+    local s = Instance.new("UIStroke"); s.Color = Color3.fromRGB(80,80,120); s.Thickness = 1; s.Parent = StandDropdown
+    local l = Instance.new("UIListLayout")
+    l.SortOrder = Enum.SortOrder.LayoutOrder
+    l.Padding = UDim.new(0,2)
+    l.HorizontalAlignment = Enum.HorizontalAlignment.Center
+    l.Parent = StandDropdown
+end
+
 local function MakeInfoRow(yOffset, defaultText, labelColor)
     local lbl = Instance.new("TextLabel")
     lbl.Size = UDim2.new(1, -34, 0, 22)
@@ -204,8 +325,8 @@ local function MakeInfoRow(yOffset, defaultText, labelColor)
     swapBtn.Position = UDim2.new(1, -28, 0, yOffset + 2)
     swapBtn.BackgroundColor3 = Color3.fromRGB(40, 40, 60)
     swapBtn.TextColor3 = Color3.fromRGB(180, 180, 255)
-    swapBtn.Text = "R"
-    swapBtn.TextSize = 11
+    swapBtn.Text = "="
+    swapBtn.TextSize = 14
     swapBtn.Font = Enum.Font.GothamBold
     swapBtn.BorderSizePixel = 0
     swapBtn.Parent = InfoStrip
@@ -472,9 +593,9 @@ local function DetectLoadoutFromInventory()
     end
     if standNode then
         local t = standNode.Text or ""
-        if     t:find("TUSK ACT 4") then CurrentStand = "Tusk Act 4"
+        if     t:find("TUSK ACT 4") then CurrentStand = FormatStandLabel(t)
         elseif t:find("KING OF U")  then CurrentStand = "King of U"
-        else                             CurrentStand = "Unknown" end
+        else                             CurrentStand = FormatStandLabel(t) end
     end
     UpdateLoadoutLabels()
     -- print(string.format("[AutoJJBI] Loadout — Stand: %s | Style: %s", CurrentStand, CurrentStyle))
@@ -524,8 +645,10 @@ end
 
 local function EnsureStand(targetStand)
     if CurrentStand == targetStand then return end
+    local slot = FindStandSlot(targetStand)
+    if not slot then return end
     FleeAnyActiveBattle()
-    SwapStand(1)
+    StandStorageAction:FireServer("Swap", slot)
     local waited = 0
     while waited < 5 do
         task.wait(0.3); waited += 0.3
@@ -535,10 +658,10 @@ local function EnsureStand(targetStand)
 end
 
 local function EnforceStoryLoadout()
-    FleeAnyActiveBattle()
+    if not IsInStoryBattle() then
+        FleeAnyActiveBattle()
+    end
     DetectLoadoutFromInventory()
-    -- Prestige on: enforce TA4 + ULF
-    -- Prestige off: enforce ULF only, stand is free
     if PrestigeEnabled then
         EnsureStand("Tusk Act 4")
     end
@@ -546,11 +669,82 @@ local function EnforceStoryLoadout()
 end
 
 local function EnforceDungeonLoadout()
-    -- Dungeon always enforces TA4 + ULF
-    FleeAnyActiveBattle()
+    if not IsInDungeonBattle() then
+        FleeAnyActiveBattle()
+    end
     DetectLoadoutFromInventory()
     EnsureStand("Tusk Act 4")
     EnsureStyle("ULF")
+end
+
+-- ================================================================
+-- [[ DROPDOWN LOGIC ]]
+-- Placed after all combat reads so closures can reference them
+-- ================================================================
+local DropdownOpen = false
+
+local function CloseDropdown()
+    DropdownOpen = false
+    StandDropdown.Visible = false
+    for _, child in ipairs(StandDropdown:GetChildren()) do
+        if child:IsA("TextButton") then child:Destroy() end
+    end
+end
+
+local function OpenStandDropdown()
+    if DropdownOpen then CloseDropdown(); return end
+
+    local slots = ScanStandSlots()
+    if #slots == 0 then return end
+
+    for _, child in ipairs(StandDropdown:GetChildren()) do
+        if child:IsA("TextButton") then child:Destroy() end
+    end
+
+    local ENTRY_HEIGHT = 22
+    local PADDING      = 2
+    local MIN_WIDTH    = 160
+
+    local maxLen = MIN_WIDTH
+    for _, entry in ipairs(slots) do
+        local estWidth = #entry.name * 7 + 16
+        if estWidth > maxLen then maxLen = estWidth end
+    end
+
+    for i, entry in ipairs(slots) do
+        local entryBtn = Instance.new("TextButton")
+        entryBtn.Size = UDim2.new(1, -8, 0, ENTRY_HEIGHT)
+        entryBtn.BackgroundColor3 = Color3.fromRGB(32, 32, 48)
+        entryBtn.TextColor3 = Color3.fromRGB(200, 200, 255)
+        entryBtn.Text = entry.name
+        entryBtn.TextSize = 10
+        entryBtn.Font = Enum.Font.Gotham
+        entryBtn.BorderSizePixel = 0
+        entryBtn.TextXAlignment = Enum.TextXAlignment.Center
+        entryBtn.LayoutOrder = i
+        entryBtn.ZIndex = 11
+        entryBtn.Parent = StandDropdown
+        do local c = Instance.new("UICorner"); c.CornerRadius = UDim.new(0,4); c.Parent = entryBtn end
+
+        local slotNum = entry.slot
+        entryBtn.MouseButton1Click:Connect(function()
+            if not slotNum then return end
+            if IsInStoryBattle() then
+                StoryUseSkill("Flee"); task.wait(1)
+            elseif IsInDungeonBattle() then
+                TryFleeFromDungeon(); task.wait(0.5)
+            end
+            StandStorageAction:FireServer("Swap", slotNum)
+            task.wait(0.3)
+            DetectLoadoutFromInventory()
+            CloseDropdown()
+        end)
+    end
+
+    local totalHeight = (#slots * (ENTRY_HEIGHT + PADDING)) + 6
+    StandDropdown.Size = UDim2.new(0, maxLen, 0, totalHeight)
+    StandDropdown.Visible = true
+    DropdownOpen = true
 end
 
 -- ================================================================
@@ -834,7 +1028,6 @@ end
 -- [[ WORLD BOSS SCANNER ]]
 -- ================================================================
 local function RunWorldBossScanner()
-    -- Check immediately on start in case a boss is already available
     local engageText = GetEngageBtnText()
     if not engageText:find("ENGAGE BOSS") then
         WaitForBossTimer()
@@ -871,8 +1064,6 @@ local function RunWorldBossFight()
     PreBossStand = CurrentStand
     PreBossStyle = CurrentStyle
 
-    -- If KOU, swap to Shrine for optimal bleed stacking
-    -- (KOU has 10% passive burn chance making Melting Overdrive redundant)
     if CurrentStand == "King of U" and CurrentStyle ~= "Shrine" then
         SwapStyle(1)
         local waited = 0
@@ -941,7 +1132,11 @@ local function RunWorldBossFight()
         SwapStyle(1); task.wait(0.5)
     end
     if CurrentStand ~= PreBossStand then
-        SwapStand(1); task.wait(0.5)
+        local slot = FindStandSlot(PreBossStand)
+        if slot then
+            StandStorageAction:FireServer("Swap", slot)
+            task.wait(0.5)
+        end
     end
     if CurrentStyle ~= PreBossStyle or CurrentStand ~= PreBossStand then
         DetectLoadoutFromInventory()
@@ -1023,11 +1218,13 @@ local function RunDungeonLoop()
     EnforceDungeonLoadout()
 
     while DungeonEnabled and not ScriptKilled do
-        StartDungeon()
-        task.wait(ACTION_CD)
-        local waited = 0
-        while not IsInDungeonBattle() and waited < 5 do
-            task.wait(0.2); waited += 0.2
+        if not IsInDungeonBattle() then
+            StartDungeon()
+            task.wait(ACTION_CD)
+            local waited = 0
+            while not IsInDungeonBattle() and waited < 5 do
+                task.wait(0.2); waited += 0.2
+            end
         end
         if IsInDungeonBattle() then
             RunBattleLoop(DungeonCtx, function() return DungeonEnabled end, IsInDungeonBattle)
@@ -1081,13 +1278,7 @@ DungeonBtn.MouseButton1Click:Connect(function()
 end)
 
 StandSwapBtn.MouseButton1Click:Connect(function()
-    if IsInStoryBattle() then
-        StoryUseSkill("Flee"); task.wait(1)
-    elseif IsInDungeonBattle() then
-        TryFleeFromDungeon(); task.wait(0.5)
-    end
-    SwapStand(1); task.wait(0.3)
-    DetectLoadoutFromInventory()
+    OpenStandDropdown()
 end)
 
 StyleSwapBtn.MouseButton1Click:Connect(function()
@@ -1104,6 +1295,7 @@ KillBtn.MouseButton1Click:Connect(function()
     StoryEnabled      = false
     DungeonEnabled    = false
     WorldBossPriority = false
+    CloseDropdown()
     KillScript()
     task.wait(ACTION_CD)
     ScreenGui:Destroy()

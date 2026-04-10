@@ -91,10 +91,54 @@ local STAND_STORAGE_PATH = {
 }
 
 -- ================================================================
+-- [[ ENEMY NAME DETECTION ]]
+-- ================================================================
+local ENEMY_NAME_PATH = {
+    "JJBIMenu","MainFrame","ContentContainer","SingleplayerFrame",
+    "MainPanel","InnerContent","ContentArea","StoryFrame",
+    "CombatMainFrame","ContentContainer","HealthbarArea",
+    "EnemiesContainer","Fighter_Enemy","InfoArea","NameLabel"
+}
+
+local FULL_ROTATION_ENEMIES = {
+    ["Enrico Pucci"]        = true,
+    ["Oyecomova"]           = true,
+    ["Pork Pie Hat Kid"]    = true,
+    ["Sandman"]             = true,
+    ["Eleven Men"]          = true,
+    ["Blackmore"]           = true,
+    ["Ringo Roadagain"]     = true,
+    ["Wekapipo"]            = true,
+    ["Magenta Magenta"]     = true,
+    ["Diego Brando"]        = true,
+    ["Funny Valentine"]     = true,
+    ["Ojiro Sasame"]        = true,
+    ["Daiya Higashikata"]   = true,
+    ["Tsurugi Higashikata"] = true,
+    ["Yotsuyu Yagiyama"]    = true,
+    ["Aisho Dainenjiyama"]  = true,
+    ["Tamaki Damo"]         = true,
+    ["Urban Guerrilla"]     = true,
+    ["Dolomite"]            = true,
+    ["Jobin Higashikata"]   = true,
+    ["Tooru"]               = true,
+}
+
+local function GetStoryEnemyName()
+    local label = SafeGet(PlayerGui, table.unpack(ENEMY_NAME_PATH))
+    return label and (label.Text or "") or ""
+end
+
+local function StoryEnemyUsesFullRotation()
+    return FULL_ROTATION_ENEMIES[GetStoryEnemyName()] == true
+end
+
+local function IsTooru()
+    return GetStoryEnemyName() == "Tooru"
+end
+
+-- ================================================================
 -- [[ STAND NAME FORMATTING ]]
--- Two formats:
---   Dropdown  -> full name, full trait brackets e.g. "Tusk Act 4 [LETHAL] [OVERWHELMING]"
---   Stand label -> short name, initial traits e.g. "Tusk Act 4 [L+O]" / "KCR [F]"
 -- ================================================================
 local function StripRichText(text)
     local clean = text:gsub("<[^>]+>", "")
@@ -103,21 +147,22 @@ local function StripRichText(text)
 end
 
 local function StripSlotPrefix(name)
-    return name:match("^S%d+:%s*(.+)$") or name
+    name = name:match("^S%d+:%s*(.+)$") or name
+    name = name:match("^STAND:%s*(.+)$") or name
+    return name
 end
 
--- Full name for dropdown — strips slot prefix, keeps full [TRAIT] brackets
 local function FormatDropdownName(rawText)
     local clean = StripRichText(rawText)
     clean = StripSlotPrefix(clean)
     return clean:match("^%s*(.-)%s*$")
 end
 
--- Short name for Stand: label — abbreviated stand + initial traits
 local STAND_ABBREV = {
+    ["Tusk of U"]            = "TOU",
+    ["Tusk Act 4"]           = "TA4",
     ["King Crimson Requiem"] = "KCR",
-    ["Tusk Act 4"]           = "Tusk Act 4",
-    ["King of U"]            = "King of U",
+    ["King of U"]            = "KOU",
 }
 
 local function FormatStandLabel(rawText)
@@ -125,34 +170,45 @@ local function FormatStandLabel(rawText)
     clean = StripSlotPrefix(clean)
     clean = clean:match("^%s*(.-)%s*$")
 
-    -- Collect trait initials from brackets
-    local traits = {}
+    local traitCount = {}
+    local traitOrder = {}
     for trait in clean:gmatch("%[([A-Z]+)%]") do
-        table.insert(traits, trait:sub(1,1))
+        local initial = trait:sub(1,1)
+        if not traitCount[initial] then
+            table.insert(traitOrder, initial)
+            traitCount[initial] = 0
+        end
+        traitCount[initial] += 1
     end
 
-    -- Strip all bracket groups and connectors to get base name
     local base = clean:gsub("%s*%[%u+%]", ""):gsub("%s*&%s*", ""):match("^%s*(.-)%s*$")
 
-    -- Apply abbreviations
+    local baseUpper = base:upper()
     for full, short in pairs(STAND_ABBREV) do
-        if base:find(full, 1, true) then
+        if baseUpper == full:upper() then
             base = short
             break
         end
     end
 
-    if #traits > 0 then
-        return base .. " [" .. table.concat(traits, "+") .. "]"
+    local traitParts = {}
+    for _, initial in ipairs(traitOrder) do
+        local count = traitCount[initial]
+        if count > 1 then
+            table.insert(traitParts, initial .. count)
+        else
+            table.insert(traitParts, initial)
+        end
+    end
+
+    if #traitParts > 0 then
+        return base .. " [" .. table.concat(traitParts, "+") .. "]"
     end
     return base
 end
 
 -- ================================================================
 -- [[ STAND SLOT SCANNER ]]
--- Child 1 = StorageSlotTemplate = Swap 1 (no offset)
--- Child 2 = UIListLayout (skipped, not a Frame)
--- Child 3+ = StorageSlotTemplate = Swap (i - 1)
 -- ================================================================
 local function ScanStandSlots()
     local container = SafeGet(PlayerGui, table.unpack(STAND_STORAGE_PATH))
@@ -178,7 +234,7 @@ end
 local function FindStandSlot(targetName)
     local slots = ScanStandSlots()
     for _, entry in ipairs(slots) do
-        if entry.name:find(targetName) then
+        if entry.name:upper():find(targetName:upper(), 1, true) then
             return entry.slot
         end
     end
@@ -194,8 +250,8 @@ local LOADOUT = {
         Shrine = { signature = "Dismantle",          label = "Shrine" },
     },
     Stand = {
-        TuskAct4 = { signature = "Infinite Rotation", label = "Tusk Act 4" },
-        KingOfU  = { signature = "Raging Demon",      label = "King of U"  },
+        TuskOfU = { signature = "Infinite Rotation", label = "Tusk of U" },
+        KingOfU = { signature = "Raging Demon",      label = "King of U" },
     },
 }
 
@@ -213,10 +269,11 @@ local INV_STAND_PATH = {
 -- ================================================================
 -- [[ RESOURCE THRESHOLDS ]]
 -- ================================================================
-local ENERGY_THRESHOLD  = 20
-local STAMINA_THRESHOLD = 20
-local HP_DANGER         = 0.30
-local HP_HEAL           = 0.74
+local STORY_ENERGY_THRESHOLD   = 20
+local DUNGEON_ENERGY_THRESHOLD = 40
+local STAMINA_THRESHOLD        = 20
+local HP_DANGER                = 0.30
+local HP_HEAL                  = 0.74
 
 -- ================================================================
 -- [[ GUI ]]
@@ -287,7 +344,6 @@ InfoStrip.BorderSizePixel = 0
 InfoStrip.Parent = MainFrame
 do local c = Instance.new("UICorner"); c.CornerRadius = UDim.new(0,5); c.Parent = InfoStrip end
 
--- Stand dropdown panel — offset 4px from top so it doesn't hug the strip border
 local StandDropdown = Instance.new("Frame")
 StandDropdown.Name = "StandDropdown"
 StandDropdown.Size = UDim2.new(0, 160, 0, 0)
@@ -527,6 +583,10 @@ local function FighterHasStatus(fighter, name)
     return GetStatusDuration(fighter, name) > 0
 end
 
+local function EnemyStatusDur(ctx, name)
+    return GetStatusDuration(GetEnemyFighter(ctx), name)
+end
+
 local function IsPlayerIncapacitated(ctx)
     local f = GetPlayerFighter(ctx)
     return FighterHasStatus(f,"Stun") or FighterHasStatus(f,"Freeze")
@@ -592,10 +652,7 @@ local function DetectLoadoutFromInventory()
         else                                    CurrentStyle = "Unknown" end
     end
     if standNode then
-        local t = standNode.Text or ""
-        if     t:find("TUSK ACT 4") then CurrentStand = FormatStandLabel(t)
-        elseif t:find("KING OF U")  then CurrentStand = "King of U"
-        else                             CurrentStand = FormatStandLabel(t) end
+        CurrentStand = FormatStandLabel(standNode.Text or "")
     end
     UpdateLoadoutLabels()
     -- print(string.format("[AutoJJBI] Loadout — Stand: %s | Style: %s", CurrentStand, CurrentStyle))
@@ -611,7 +668,14 @@ local function ConfirmLoadoutInCombat(ctx)
                 if base == data.signature then CurrentStyle = data.label end
             end
             for _, data in pairs(LOADOUT.Stand) do
-                if base == data.signature then CurrentStand = data.label end
+                if base == data.signature then
+                    local standNode = SafeGet(PlayerGui, table.unpack(INV_STAND_PATH))
+                    if standNode then
+                        CurrentStand = FormatStandLabel(standNode.Text or "")
+                    else
+                        CurrentStand = data.label
+                    end
+                end
             end
         end
     end
@@ -644,7 +708,7 @@ local function EnsureStyle(targetStyle)
 end
 
 local function EnsureStand(targetStand)
-    if CurrentStand == targetStand then return end
+    if CurrentStand:upper():find(targetStand:upper(), 1, true) then return end
     local slot = FindStandSlot(targetStand)
     if not slot then return end
     FleeAnyActiveBattle()
@@ -653,7 +717,7 @@ local function EnsureStand(targetStand)
     while waited < 5 do
         task.wait(0.3); waited += 0.3
         DetectLoadoutFromInventory()
-        if CurrentStand == targetStand then return end
+        if CurrentStand:upper():find(targetStand:upper(), 1, true) then return end
     end
 end
 
@@ -663,7 +727,7 @@ local function EnforceStoryLoadout()
     end
     DetectLoadoutFromInventory()
     if PrestigeEnabled then
-        EnsureStand("Tusk Act 4")
+        EnsureStand("Tusk of U")
     end
     EnsureStyle("ULF")
 end
@@ -673,13 +737,12 @@ local function EnforceDungeonLoadout()
         FleeAnyActiveBattle()
     end
     DetectLoadoutFromInventory()
-    EnsureStand("Tusk Act 4")
+    EnsureStand("Tusk of U")
     EnsureStyle("ULF")
 end
 
 -- ================================================================
 -- [[ DROPDOWN LOGIC ]]
--- Placed after all combat reads so closures can reference them
 -- ================================================================
 local DropdownOpen = false
 
@@ -748,37 +811,123 @@ local function OpenStandDropdown()
 end
 
 -- ================================================================
--- [[ COMBAT DECISION ENGINE (Story + Dungeon) ]]
+-- [[ SHARED SURVIVAL CHECK ]]
 -- ================================================================
-local function RunCombatTick(ctx)
-    local _, _, hpPct     = GetHP(ctx)
-    local energy, stamina = GetResources(ctx)
-
-    if IsPlayerIncapacitated(ctx) then UseSkill(ctx,"Rest"); return end
-    if IsConfused(ctx)            then UseSkill(ctx,"Rest"); return end
+local function HandleSurvival(ctx)
+    local _, _, hpPct = GetHP(ctx)
 
     if hpPct < HP_DANGER then
         if     CanUse(ctx,"Instant Reformation") then UseSkill(ctx,"Instant Reformation")
         elseif CanUse(ctx,"Block")               then UseSkill(ctx,"Block")
         else                                          UseSkill(ctx,"Rest")
         end
-        return
+        return true
     end
 
     if hpPct < HP_HEAL then
         if CanUse(ctx,"Instant Reformation") then
             ctx.HasBlockedThisDip = false
-            UseSkill(ctx,"Instant Reformation"); return
+            UseSkill(ctx,"Instant Reformation")
+            return true
         end
         if not ctx.HasBlockedThisDip then
             ctx.HasBlockedThisDip = true
-            if CanUse(ctx,"Block") then UseSkill(ctx,"Block"); return end
+            if CanUse(ctx,"Block") then
+                UseSkill(ctx,"Block")
+                return true
+            end
         end
     else
         ctx.HasBlockedThisDip = false
     end
 
-    local hasEnergy  = energy  >= ENERGY_THRESHOLD
+    return false
+end
+
+-- ================================================================
+-- [[ COMBAT ENGINE — STORY ]]
+-- Tooru (prestige OFF): Illusory Presence -> Rain of Debris ->
+--   Golden Spin -> Melting Overdrive -> Infinite Rotation
+-- Full rotation enemies: Illusory Presence -> Golden Spin ->
+--   Infinite Rotation
+-- All others: Infinite Rotation only
+-- ================================================================
+local function RunStoryCombatTick()
+    local ctx             = StoryCtx
+    local energy, stamina = GetResources(ctx)
+
+    if IsPlayerIncapacitated(ctx) then UseSkill(ctx,"Rest"); return end
+    if IsConfused(ctx)            then UseSkill(ctx,"Rest"); return end
+    if HandleSurvival(ctx)        then return end
+
+    local hasEnergy  = energy  >= STORY_ENERGY_THRESHOLD
+    local hasStamina = stamina >= STAMINA_THRESHOLD
+
+    if not hasEnergy and not hasStamina then UseSkill(ctx,"Rest"); return end
+
+    -- Tooru-specific engine (prestige OFF only)
+    if IsTooru() and not PrestigeEnabled then
+        if hasEnergy and CanUse(ctx,"Illusory Presence") then
+            if not EnemyIsConfImmune(ctx) and not EnemyIsConfused(ctx) then
+                UseSkill(ctx,"Illusory Presence"); return
+            end
+        end
+        if hasEnergy and CanUse(ctx,"Rain of Debris") then
+            UseSkill(ctx,"Rain of Debris"); return
+        end
+        if hasEnergy and CanUse(ctx,"Golden Spin") then
+            if not EnemyIsStunImmune(ctx) and not EnemyIsStunned(ctx) then
+                UseSkill(ctx,"Golden Spin"); return
+            end
+        end
+        if hasStamina and CanUse(ctx,"Melting Overdrive") then
+            if not EnemyIsBurning(ctx) then
+                UseSkill(ctx,"Melting Overdrive"); return
+            end
+        end
+        if hasEnergy and CanUse(ctx,"Infinite Rotation") then
+            UseSkill(ctx,"Infinite Rotation"); return
+        end
+        UseSkill(ctx,"Rest"); return
+    end
+
+    -- Standard full rotation (Enrico Pucci + post-prestige enemies)
+    if StoryEnemyUsesFullRotation() then
+        if hasEnergy and CanUse(ctx,"Illusory Presence") then
+            if not EnemyIsConfImmune(ctx) and not EnemyIsConfused(ctx) then
+                UseSkill(ctx,"Illusory Presence"); return
+            end
+        end
+        if hasEnergy and CanUse(ctx,"Golden Spin") then
+            if not EnemyIsStunImmune(ctx) and not EnemyIsStunned(ctx) then
+                UseSkill(ctx,"Golden Spin"); return
+            end
+        end
+    end
+
+    -- Normal attack filler
+    if hasEnergy and CanUse(ctx,"Infinite Rotation") then
+        UseSkill(ctx,"Infinite Rotation"); return
+    end
+
+    UseSkill(ctx,"Rest")
+end
+
+-- ================================================================
+-- [[ COMBAT ENGINE — DUNGEON ]]
+-- TOU + ULF. Energy threshold 40, stamina threshold 20.
+-- Illusory Presence -> Golden Spin -> Melting Overdrive ->
+-- Infinite Rotation
+-- ================================================================
+local function RunDungeonCombatTick()
+    local ctx             = DungeonCtx
+    local energy, stamina = GetResources(ctx)
+
+    if IsPlayerIncapacitated(ctx) then UseSkill(ctx,"Rest"); return end
+    if IsConfused(ctx)            then UseSkill(ctx,"Rest"); return end
+    if HandleSurvival(ctx)        then return end
+
+    local hasEnergy  = energy  >= DUNGEON_ENERGY_THRESHOLD
     local hasStamina = stamina >= STAMINA_THRESHOLD
 
     if not hasEnergy and not hasStamina then UseSkill(ctx,"Rest"); return end
@@ -789,25 +938,9 @@ local function RunCombatTick(ctx)
         end
     end
 
-    if hasEnergy and CanUse(ctx,"Dimensional Slash") then
-        if not EnemyIsBleeding(ctx) then
-            UseSkill(ctx,"Dimensional Slash"); return
-        end
-    end
-
-    if hasEnergy and CanUse(ctx,"Rain of Debris") then
-        UseSkill(ctx,"Rain of Debris"); return
-    end
-
     if hasEnergy and CanUse(ctx,"Golden Spin") then
         if not EnemyIsStunImmune(ctx) and not EnemyIsStunned(ctx) then
             UseSkill(ctx,"Golden Spin"); return
-        end
-    end
-
-    if hasEnergy and CanUse(ctx,"Cellular Destruction") then
-        if not EnemyIsPoisoned(ctx) then
-            UseSkill(ctx,"Cellular Destruction"); return
         end
     end
 
@@ -819,67 +952,40 @@ local function RunCombatTick(ctx)
 
     if hasEnergy and CanUse(ctx,"Infinite Rotation") then
         UseSkill(ctx,"Infinite Rotation"); return
-    end
-    if hasEnergy and CanUse(ctx,"Raging Demon") then
-        UseSkill(ctx,"Raging Demon"); return
     end
 
     if not hasEnergy and hasStamina then
         if CanUse(ctx,"Melting Overdrive") then UseSkill(ctx,"Melting Overdrive"); return end
         UseSkill(ctx,"Rest"); return
     end
+
     if hasEnergy and not hasStamina then
-        if     CanUse(ctx,"Infinite Rotation") then UseSkill(ctx,"Infinite Rotation"); return
-        elseif CanUse(ctx,"Raging Demon")      then UseSkill(ctx,"Raging Demon");      return
-        else                                        UseSkill(ctx,"Rest");               return
-        end
+        if CanUse(ctx,"Infinite Rotation") then UseSkill(ctx,"Infinite Rotation"); return end
+        UseSkill(ctx,"Rest"); return
     end
 
     UseSkill(ctx,"Rest")
 end
 
 -- ================================================================
--- [[ WORLD BOSS COMBAT TICK ]]
+-- [[ COMBAT ENGINE — WORLD BOSS ]]
+-- TOU + Shrine enforced.
+-- Illusory Presence -> Rain of Debris -> Golden Spin ->
+-- Malevolent Shrine (bleed <= 1) -> Divine Flame (burn <= 1) ->
+-- Infinite Rotation filler
 -- ================================================================
 local function RunWorldBossTick()
     local ctx             = WorldBossCtx
-    local _, _, hpPct     = GetHP(ctx)
     local energy, stamina = GetResources(ctx)
 
     if IsPlayerIncapacitated(ctx) then UseSkill(ctx,"Rest"); return end
     if IsConfused(ctx)            then UseSkill(ctx,"Rest"); return end
+    if HandleSurvival(ctx)        then return end
 
-    if hpPct < HP_DANGER then
-        if     CanUse(ctx,"Instant Reformation") then UseSkill(ctx,"Instant Reformation")
-        elseif CanUse(ctx,"Block")               then UseSkill(ctx,"Block")
-        else                                          UseSkill(ctx,"Rest")
-        end
-        return
-    end
-
-    if hpPct < HP_HEAL then
-        if CanUse(ctx,"Instant Reformation") then
-            ctx.HasBlockedThisDip = false
-            UseSkill(ctx,"Instant Reformation"); return
-        end
-        if not ctx.HasBlockedThisDip then
-            ctx.HasBlockedThisDip = true
-            if CanUse(ctx,"Block") then UseSkill(ctx,"Block"); return end
-        end
-    else
-        ctx.HasBlockedThisDip = false
-    end
-
-    local hasEnergy  = energy  >= ENERGY_THRESHOLD
+    local hasEnergy  = energy  >= STORY_ENERGY_THRESHOLD
     local hasStamina = stamina >= STAMINA_THRESHOLD
 
     if not hasEnergy and not hasStamina then UseSkill(ctx,"Rest"); return end
-
-    if hasEnergy and CanUse(ctx,"Golden Spin") then
-        if not EnemyIsStunImmune(ctx) and not EnemyIsStunned(ctx) then
-            UseSkill(ctx,"Golden Spin"); return
-        end
-    end
 
     if hasEnergy and CanUse(ctx,"Illusory Presence") then
         if not EnemyIsConfImmune(ctx) and not EnemyIsConfused(ctx) then
@@ -887,75 +993,70 @@ local function RunWorldBossTick()
         end
     end
 
-    if hasEnergy and CanUse(ctx,"Cellular Destruction") then
-        if not EnemyIsPoisoned(ctx) then
-            UseSkill(ctx,"Cellular Destruction"); return
-        end
-    end
-
     if hasEnergy and CanUse(ctx,"Rain of Debris") then
         UseSkill(ctx,"Rain of Debris"); return
     end
 
-    if hasEnergy and CanUse(ctx,"Dimensional Slash") then
-        if not EnemyIsBleeding(ctx) then
-            UseSkill(ctx,"Dimensional Slash"); return
+    if hasEnergy and CanUse(ctx,"Golden Spin") then
+        if not EnemyIsStunImmune(ctx) and not EnemyIsStunned(ctx) then
+            UseSkill(ctx,"Golden Spin"); return
         end
     end
 
     if hasStamina and CanUse(ctx,"Malevolent Shrine") then
-        if not EnemyIsBleeding(ctx) then
+        if EnemyStatusDur(ctx,"Bleed") <= 1 then
             UseSkill(ctx,"Malevolent Shrine"); return
         end
     end
 
-    if hasStamina and CanUse(ctx,"Melting Overdrive") then
-        if not EnemyIsBurning(ctx) then
-            UseSkill(ctx,"Melting Overdrive"); return
-        end
-    end
-
-    if hasEnergy and CanUse(ctx,"Absolute Energy") then
-        if not PlayerHasStrengthBuff(ctx) then
-            UseSkill(ctx,"Absolute Energy"); return
+    if hasStamina and CanUse(ctx,"Divine Flame") then
+        if EnemyStatusDur(ctx,"Burn") <= 1 then
+            UseSkill(ctx,"Divine Flame"); return
         end
     end
 
     if hasEnergy and CanUse(ctx,"Infinite Rotation") then
         UseSkill(ctx,"Infinite Rotation"); return
     end
-    if hasEnergy and CanUse(ctx,"Raging Demon") then
-        UseSkill(ctx,"Raging Demon"); return
-    end
 
     if not hasEnergy and hasStamina then
-        if     CanUse(ctx,"Melting Overdrive")  then UseSkill(ctx,"Melting Overdrive");  return
-        elseif CanUse(ctx,"Malevolent Shrine")  then UseSkill(ctx,"Malevolent Shrine");  return
-        else                                         UseSkill(ctx,"Rest");               return
-        end
-    end
-    if hasEnergy and not hasStamina then
-        if     CanUse(ctx,"Infinite Rotation") then UseSkill(ctx,"Infinite Rotation"); return
-        elseif CanUse(ctx,"Raging Demon")      then UseSkill(ctx,"Raging Demon");      return
+        if     CanUse(ctx,"Malevolent Shrine") then UseSkill(ctx,"Malevolent Shrine"); return
+        elseif CanUse(ctx,"Divine Flame")      then UseSkill(ctx,"Divine Flame");      return
         else                                        UseSkill(ctx,"Rest");              return
         end
+    end
+
+    if hasEnergy and not hasStamina then
+        if CanUse(ctx,"Infinite Rotation") then UseSkill(ctx,"Infinite Rotation"); return end
+        UseSkill(ctx,"Rest"); return
     end
 
     UseSkill(ctx,"Rest")
 end
 
 -- ================================================================
--- [[ BATTLE LOOP ]]
+-- [[ BATTLE LOOPS ]]
 -- ================================================================
-local function RunBattleLoop(ctx, enabledFlag, inBattleFn)
-    ctx.HasBlockedThisDip = false
+local function RunStoryBattleLoop(enabledFlag)
+    StoryCtx.HasBlockedThisDip = false
     task.wait(0.5)
-    ConfirmLoadoutInCombat(ctx)
-    while enabledFlag() and not ScriptKilled and inBattleFn() do
-        RunCombatTick(ctx)
+    ConfirmLoadoutInCombat(StoryCtx)
+    while enabledFlag() and not ScriptKilled and IsInStoryBattle() do
+        RunStoryCombatTick()
         task.wait(ACTION_CD)
     end
-    ctx.HasBlockedThisDip = false
+    StoryCtx.HasBlockedThisDip = false
+end
+
+local function RunDungeonBattleLoop(enabledFlag)
+    DungeonCtx.HasBlockedThisDip = false
+    task.wait(0.5)
+    ConfirmLoadoutInCombat(DungeonCtx)
+    while enabledFlag() and not ScriptKilled and IsInDungeonBattle() do
+        RunDungeonCombatTick()
+        task.wait(ACTION_CD)
+    end
+    DungeonCtx.HasBlockedThisDip = false
 end
 
 -- ================================================================
@@ -994,27 +1095,19 @@ end
 local function WaitForBossTimer()
     while StoryEnabled and not ScriptKilled do
         local secs = ParseTimerLabel()
-
-        if not secs or secs <= 0 then
-            return
-        end
+        if not secs or secs <= 0 then return end
 
         if secs > 30 * 60 then
-            -- warn(string.format("[WorldBoss] Timer %ds (>30min) — sleeping 30min then rechecking.", secs))
             local elapsed = 0
             while elapsed < 1800 and StoryEnabled and not ScriptKilled do
                 task.wait(1); elapsed += 1
             end
-
         elseif secs > 10 * 60 then
-            -- warn(string.format("[WorldBoss] Timer %ds (>10min) — sleeping 10min then rechecking.", secs))
             local elapsed = 0
             while elapsed < 600 and StoryEnabled and not ScriptKilled do
                 task.wait(1); elapsed += 1
             end
-
         else
-            -- warn(string.format("[WorldBoss] Timer %ds (≤10min) — waiting exact duration.", secs))
             local elapsed = 0
             while elapsed < secs and StoryEnabled and not ScriptKilled do
                 task.wait(1); elapsed += 1
@@ -1037,7 +1130,6 @@ local function RunWorldBossScanner()
         local engageText = GetEngageBtnText()
 
         if engageText:find("ENGAGE BOSS") then
-            -- warn("[WorldBoss] Boss available — flagging priority.")
             WorldBossPriority = true
             while WorldBossPriority and StoryEnabled and not ScriptKilled do
                 task.wait(1)
@@ -1046,7 +1138,6 @@ local function RunWorldBossScanner()
             WaitForBossTimer()
 
         elseif engageText:find("ALREADY FOUGHT") then
-            -- warn("[WorldBoss] Already fought this cycle.")
             task.wait(5)
             WaitForBossTimer()
 
@@ -1064,7 +1155,8 @@ local function RunWorldBossFight()
     PreBossStand = CurrentStand
     PreBossStyle = CurrentStyle
 
-    if CurrentStand == "King of U" and CurrentStyle ~= "Shrine" then
+    DetectLoadoutFromInventory()
+    if CurrentStyle ~= "Shrine" then
         SwapStyle(1)
         local waited = 0
         while waited < 5 do
@@ -1073,8 +1165,7 @@ local function RunWorldBossFight()
             if CurrentStyle == "Shrine" then break end
         end
     end
-
-    -- warn(string.format("[WorldBoss] Engaging — %s + %s", CurrentStand, CurrentStyle))
+    EnsureStand("Tusk of U")
 
     EngageWorldBoss()
 
@@ -1095,7 +1186,6 @@ local function RunWorldBossFight()
     end
 
     if not fightStarted then
-        -- warn("[WorldBoss] Fight start unconfirmed — firing fallback attack.")
         WorldBossUseSkill("Infinite Rotation")
         task.wait(1)
     end
@@ -1131,14 +1221,14 @@ local function RunWorldBossFight()
     if CurrentStyle ~= PreBossStyle then
         SwapStyle(1); task.wait(0.5)
     end
-    if CurrentStand ~= PreBossStand then
+    if not CurrentStand:upper():find(PreBossStand:upper(), 1, true) then
         local slot = FindStandSlot(PreBossStand)
         if slot then
             StandStorageAction:FireServer("Swap", slot)
             task.wait(0.5)
         end
     end
-    if CurrentStyle ~= PreBossStyle or CurrentStand ~= PreBossStand then
+    if CurrentStyle ~= PreBossStyle or not CurrentStand:upper():find(PreBossStand:upper(), 1, true) then
         DetectLoadoutFromInventory()
     end
 
@@ -1173,8 +1263,7 @@ local function RunStoryLoop()
     task.wait(0.5)
 
     if IsInStoryBattle() then
-        -- warn("[Story] Already in story battle — finishing first.")
-        RunBattleLoop(StoryCtx, function() return StoryEnabled end, IsInStoryBattle)
+        RunStoryBattleLoop(function() return StoryEnabled end)
         task.wait(ACTION_CD)
     end
 
@@ -1187,23 +1276,21 @@ local function RunStoryLoop()
 
     while StoryEnabled and not ScriptKilled do
         if WorldBossPriority then
-            -- warn("[Story] World boss priority — finishing open battle first.")
             if IsInStoryBattle() then
-                RunBattleLoop(StoryCtx, function() return StoryEnabled end, IsInStoryBattle)
+                RunStoryBattleLoop(function() return StoryEnabled end)
                 task.wait(ACTION_CD)
             end
             RunWorldBossFight()
             task.wait(ACTION_CD)
 
         elseif PrestigeEnabled and IsBokuNoRhythm() then
-            -- warn("[Story] Boku no Rhythm — Prestiging.")
             TryPrestige()
             task.wait(ACTION_CD)
 
         else
             CombatAction:FireServer("EngageStory")
             task.wait(ACTION_CD)
-            RunBattleLoop(StoryCtx, function() return StoryEnabled end, IsInStoryBattle)
+            RunStoryBattleLoop(function() return StoryEnabled end)
             task.wait(ACTION_CD)
         end
 
@@ -1227,7 +1314,7 @@ local function RunDungeonLoop()
             end
         end
         if IsInDungeonBattle() then
-            RunBattleLoop(DungeonCtx, function() return DungeonEnabled end, IsInDungeonBattle)
+            RunDungeonBattleLoop(function() return DungeonEnabled end)
         end
         task.wait(ACTION_CD)
     end

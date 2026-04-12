@@ -1,0 +1,2063 @@
+-- // JJBI Auto | Prototype B
+-- // Clean GUI | Config Flows | Daily Mode | Auto Training
+
+-- [[ SERVICES ]] --
+local Players           = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local PlayerGui         = Players.LocalPlayer.PlayerGui
+
+-- [[ REMOTES ]] --
+local Network            = ReplicatedStorage:WaitForChild("Network")
+local CombatAction       = Network:WaitForChild("CombatAction")
+local PrestigeEvent      = Network:WaitForChild("PrestigeEvent")
+local StandStorageAction = Network:WaitForChild("StandStorageAction")
+local DungeonAction      = Network:WaitForChild("DungeonAction")
+local WorldBossAction    = Network:WaitForChild("WorldBossAction")
+local ToggleTraining     = Network:WaitForChild("ToggleTraining")
+
+-- [[ TIMING ]] --
+local ACTION_CD = 0.2
+
+-- [[ KILL FLAG ]] --
+local ScriptKilled = false
+local function KillScript() ScriptKilled = true end
+
+-- [[ FIRE HELPERS ]] -- identical to Proto A
+local function FirePrestige()    PrestigeEvent:FireServer()                          end
+local function SwapStyle(slot)   StandStorageAction:FireServer("SwapStyle", slot)    end
+local function SwapStand(slot)   StandStorageAction:FireServer("Swap", slot)         end
+local function StartDungeon()    DungeonAction:FireServer("StartDungeon", "Endless") end
+local function EngageWorldBoss() WorldBossAction:FireServer("Engage")                end
+
+local function StoryUseSkill(name)
+    CombatAction:FireServer("Attack", { SkillName = name })
+end
+local function DungeonUseSkill(name)
+    DungeonAction:FireServer("Attack", name)
+end
+local function WorldBossUseSkill(name)
+    WorldBossAction:FireServer("Attack", { SkillName = name })
+end
+
+-- ================================================================
+-- [[ CONFIG ]]
+-- ================================================================
+if not _G.JJBIConfigB then
+    _G.JJBIConfigB = {
+        storyStandName   = nil,
+        dungeonStandName = nil,
+        wbStandName      = nil,
+        wbStyleName      = nil,
+        prestigeEnabled  = false,
+        dailyModeOn      = false,
+        dailyFloor       = nil,
+        pucciPriority    = {},
+        tooruPriority    = {},
+        wbPriority       = {},
+        dungeonPriority  = {},
+    }
+end
+local CFG = _G.JJBIConfigB
+
+local function SaveConfig()
+    _G.JJBIConfigBSaved = {}
+    for k, v in pairs(CFG) do
+        if type(v) == "table" then
+            local copy = {}
+            for i = 1, #v do copy[i] = v[i] end
+            _G.JJBIConfigBSaved[k] = copy
+        else
+            _G.JJBIConfigBSaved[k] = v
+        end
+    end
+end
+
+local function LoadConfig()
+    if not _G.JJBIConfigBSaved then return false end
+    for k, v in pairs(_G.JJBIConfigBSaved) do
+        if type(v) == "table" then
+            local copy = {}
+            for i = 1, #v do copy[i] = v[i] end
+            CFG[k] = copy
+        else
+            CFG[k] = v
+        end
+    end
+    return true
+end
+
+-- ================================================================
+-- [[ MOVE DATA ]]
+-- ================================================================
+local STAND_MOVES = {
+    ["Tusk of U"] = {
+        normal = "Infinite Rotation",
+        moves  = {
+            { name = "Infinite Rotation", statusType = "normal",    cost = "energy"  },
+            { name = "Golden Spin",       statusType = "stun",      cost = "energy"  },
+            { name = "Illusory Presence", statusType = "confusion", cost = "energy"  },
+            { name = "Rain of Debris",    statusType = "debuff",    cost = "energy"  },
+        },
+    },
+}
+
+local STYLE_MOVES = {
+    ["Ultimate Lifeform"] = {
+        healMove = "Instant Reformation",
+        moves = {
+            { name = "Melting Overdrive",   statusType = "burn", cost = "stamina" },
+            { name = "Instant Reformation", statusType = "heal", cost = "stamina" },
+        },
+    },
+    ["Shrine"] = {
+        healMove = nil,
+        moves = {
+            { name = "Dismantle",         statusType = "bleed", cost = "stamina" },
+            { name = "Cleave",            statusType = "bleed", cost = "stamina" },
+            { name = "Divine Flame",      statusType = "burn",  cost = "stamina" },
+            { name = "Malevolent Shrine", statusType = "bleed", cost = "stamina" },
+        },
+    },
+}
+
+-- ================================================================
+-- [[ PATH HELPERS ]] -- identical to Proto A
+-- ================================================================
+local function SafeGet(root, ...)
+    local cur = root
+    for _, n in ipairs({...}) do
+        if not cur then return nil end
+        cur = cur:FindFirstChild(n)
+    end
+    return cur
+end
+
+local function ResolveRoot(pathStr)
+    local node = PlayerGui
+    for part in pathStr:gmatch("[^%.]+") do
+        if not node then return nil end
+        node = node:FindFirstChild(part)
+    end
+    return node
+end
+
+-- ================================================================
+-- [[ COMBAT CONTEXTS ]] -- identical to Proto A
+-- ================================================================
+local BASE         = "JJBIMenu.MainFrame.ContentContainer.SingleplayerFrame.MainPanel.InnerContent.ContentArea"
+local STORY_ROOT   = BASE .. ".StoryFrame.CombatMainFrame.ContentContainer"
+local DUNGEON_ROOT = BASE .. ".DungeonFrame.CombatMainFrame.ContentContainer"
+local WBOSS_ROOT   = BASE .. ".WorldBossFrame.CombatMainFrame.ContentContainer"
+
+local function MakeContext(rootPath, useSkillFn)
+    return {
+        Root              = function() return ResolveRoot(rootPath) end,
+        UseSkill          = useSkillFn,
+        HasBlockedThisDip = false,
+    }
+end
+
+local StoryCtx     = MakeContext(STORY_ROOT,   StoryUseSkill)
+local DungeonCtx   = MakeContext(DUNGEON_ROOT, DungeonUseSkill)
+local WorldBossCtx = MakeContext(WBOSS_ROOT,   WorldBossUseSkill)
+
+-- ================================================================
+-- [[ PATHS ]]
+-- ================================================================
+local DUNGEON_LOG_PATH = {
+    "JJBIMenu","MainFrame","ContentContainer","SingleplayerFrame",
+    "MainPanel","InnerContent","ContentArea","DungeonFrame",
+    "CombatMainFrame","ContentContainer","ChatboxArea","ChatScroll","LogText"
+}
+local STAND_STORAGE_PATH = {
+    "JJBIMenu","MainFrame","ContentContainer","InventoryFrame",
+    "MainPanel","InnerContent","TabContainer","StandTabContent",
+    "StandMidRow","StandStorageCard","StorageContainer"
+}
+local STYLE_STORAGE_PATH = {
+    "JJBIMenu","MainFrame","ContentContainer","InventoryFrame",
+    "MainPanel","InnerContent","TabContainer","PlayerTabContent",
+    "PlayerMidRow","StyleStorageCard","StorageContainer"
+}
+local INV_STAND_PATH = {
+    "JJBIMenu","MainFrame","ContentContainer","InventoryFrame",
+    "MainPanel","InnerContent","TabContainer","StandTabContent",
+    "StandInfoCard","StandRow","Label"
+}
+local INV_STYLE_PATH = {
+    "JJBIMenu","MainFrame","ContentContainer","InventoryFrame",
+    "MainPanel","InnerContent","TabContainer","PlayerTabContent",
+    "PlayerInfoCard","StyleRow","Label"
+}
+local ENEMY_NAME_PATH = {
+    "JJBIMenu","MainFrame","ContentContainer","SingleplayerFrame",
+    "MainPanel","InnerContent","ContentArea","StoryFrame",
+    "CombatMainFrame","ContentContainer","HealthbarArea",
+    "EnemiesContainer","Fighter_Enemy","InfoArea","NameLabel"
+}
+local TRAINING_BTN_PATH = {
+    "JJBIMenu","MainFrame","ContentContainer","TrainingFrame",
+    "MainPanel","InnerContent","CenterContainer","ToggleTrainBtn"
+}
+local WB_ENGAGE_PATH = {
+    "JJBIMenu","MainFrame","ContentContainer","SingleplayerFrame",
+    "MainPanel","InnerContent","ContentArea","WorldBossFrame",
+    "MenuContainer","InfoCard","EngageBtn"
+}
+local WB_TIMER_PATH = {
+    "JJBIMenu","MainFrame","ContentContainer","SingleplayerFrame",
+    "MainPanel","InnerContent","ContentArea","WorldBossFrame",
+    "MenuContainer","InfoCard","TimerLabel"
+}
+local WB_TURN_PATH = {
+    "JJBIMenu","MainFrame","ContentContainer","SingleplayerFrame",
+    "MainPanel","InnerContent","ContentArea","WorldBossFrame",
+    "CombatMainFrame","TurnLabel"
+}
+local WB_LOG_PATH = {
+    "JJBIMenu","MainFrame","ContentContainer","SingleplayerFrame",
+    "MainPanel","InnerContent","ContentArea","WorldBossFrame",
+    "CombatMainFrame","ContentContainer","ChatboxArea","ChatScroll","LogText"
+}
+local DUNGEON_FLOOR_PATH = {
+    "JJBIMenu","MainFrame","ContentContainer","SingleplayerFrame",
+    "MainPanel","InnerContent","ContentArea","DungeonFrame",
+    "CombatMainFrame","WaveLabel"
+}
+local STORY_BTN_PATH = {
+    "JJBIMenu","MainFrame","ContentContainer","SingleplayerFrame",
+    "MainPanel","InnerContent","ContentArea","StoryFrame",
+    "CombatMainFrame","ContentContainer","ButtonContainer","StoryEncounterBtn"
+}
+
+-- ================================================================
+-- [[ ENEMY / STORY DETECTION ]]
+-- ================================================================
+local PUCCI_CONFIG_ENEMIES = {
+    ["Enrico Pucci"]=true,
+    ["Oyecomova"]=true, ["Pork Pie Hat Kid"]=true,
+    ["Sandman"]=true, ["Eleven Men"]=true, ["Blackmore"]=true,
+    ["Ringo Roadagain"]=true, ["Wekapipo"]=true, ["Magenta Magenta"]=true,
+    ["Diego Brando"]=true, ["Funny Valentine"]=true, ["Ojiro Sasame"]=true,
+    ["Daiya Higashikata"]=true, ["Tsurugi Higashikata"]=true,
+    ["Yotsuyu Yagiyama"]=true, ["Aisho Dainenjiyama"]=true,
+    ["Tamaki Damo"]=true, ["Urban Guerrilla"]=true, ["Dolomite"]=true,
+    ["Jobin Higashikata"]=true,
+}
+
+local PRESTIGE_ELIGIBLE_ENEMIES = {
+    ["Enrico Pucci"]=true,
+    ["Oyecomova"]=true, ["Pork Pie Hat Kid"]=true,
+    ["Sandman"]=true, ["Eleven Men"]=true, ["Blackmore"]=true,
+    ["Ringo Roadagain"]=true, ["Wekapipo"]=true, ["Magenta Magenta"]=true,
+    ["Diego Brando"]=true, ["Funny Valentine"]=true, ["Ojiro Sasame"]=true,
+    ["Daiya Higashikata"]=true, ["Tsurugi Higashikata"]=true,
+    ["Yotsuyu Yagiyama"]=true, ["Aisho Dainenjiyama"]=true,
+    ["Tamaki Damo"]=true, ["Urban Guerrilla"]=true, ["Dolomite"]=true,
+    ["Jobin Higashikata"]=true, ["Tooru"]=true,
+}
+
+local POST_PRESTIGE_STORIES = {
+    ["Boku no Rhythm"]=true, ["Wired"]=true, ["In a Silent Way"]=true,
+    ["Tattoo You!"]=true, ["Catch the Rainbow"]=true, ["True Man's World"]=true,
+    ["Wrecking Ball"]=true, ["20th Century Boy"]=true, ["Scary Monsters"]=true,
+    ["D4C"]=true, ["Fun Fun Fun"]=true, ["California King Bed"]=true,
+    ["Paper Moon King"]=true, ["I Am a Rock"]=true, ["Doobie Wah!"]=true,
+    ["Vitamin C"]=true, ["Brain Storm"]=true, ["Blue Hawaii"]=true,
+    ["Speed King"]=true, ["Wonder of U"]=true,
+    -- Heaven Averted is NOT here — it must be fought (contains Enrico Pucci).
+    -- Prestige triggers from PRESTIGE_ELIGIBLE_ENEMIES["Enrico Pucci"] mid-combat.
+}
+
+local function GetStoryEnemyName()
+    local label = SafeGet(PlayerGui, table.unpack(ENEMY_NAME_PATH))
+    return label and (label.Text or "") or ""
+end
+
+local function GetCurrentStoryName()
+    local btn = SafeGet(PlayerGui, table.unpack(STORY_BTN_PATH))
+    if not btn then return "" end
+    -- scan btn and all descendants for the story name text, same as Proto A IsBokuNoRhythm
+    local candidates = { btn }
+    for _, obj in ipairs(btn:GetDescendants()) do
+        table.insert(candidates, obj)
+    end
+    for _, obj in ipairs(candidates) do
+        if obj:IsA("TextLabel") or obj:IsA("TextButton") then
+            local t = obj.Text or ""
+            if t ~= "" then return t end
+        end
+    end
+    return ""
+end
+
+-- True when story button shows a post-prestige story OR current enemy is prestige-eligible
+-- "Post-prestige" means: Heaven Averted (contains Pucci) or any story after it
+local function ShouldPrestigeNow()
+    -- check enemy name first (works mid-combat)
+    local enemyName = GetStoryEnemyName()
+    if enemyName ~= "" and PRESTIGE_ELIGIBLE_ENEMIES[enemyName] then return true end
+    -- check story button text with exact table lookup
+    local storyName = GetCurrentStoryName()
+    if storyName ~= "" and POST_PRESTIGE_STORIES[storyName] then return true end
+    -- fallback: partial match scan in case of formatting differences
+    for name, _ in pairs(POST_PRESTIGE_STORIES) do
+        if storyName:find(name, 1, true) then return true end
+    end
+    for name, _ in pairs(PRESTIGE_ELIGIBLE_ENEMIES) do
+        if enemyName:find(name, 1, true) then return true end
+    end
+    return false
+end
+
+local function IsPucci()  return GetStoryEnemyName() == "Enrico Pucci" end
+local function IsTooru()  return GetStoryEnemyName() == "Tooru"        end
+
+local function EnemyUsesPucciConfig()
+    return PUCCI_CONFIG_ENEMIES[GetStoryEnemyName()] == true
+end
+
+-- ================================================================
+-- [[ NAME FORMATTING ]] -- identical to Proto A
+-- ================================================================
+local function StripRichText(text)
+    local clean = text:gsub("<[^>]+>", "")
+    clean = clean:gsub("%s+", " ")
+    return clean:match("^%s*(.-)%s*$")
+end
+
+local function StripSlotPrefix(name)
+    name = name:match("^S%d+:%s*(.+)$") or name
+    name = name:match("^STAND:%s*(.+)$") or name
+    name = name:match("^STYLE:%s*(.+)$") or name
+    return name
+end
+
+local function FormatDropdownName(rawText)
+    local clean = StripRichText(rawText)
+    clean = StripSlotPrefix(clean)
+    return clean:match("^%s*(.-)%s*$")
+end
+
+local STAND_ABBREV = {
+    ["Tusk of U"]="TOU", ["Tusk Act 4"]="TA4",
+    ["King Crimson Requiem"]="KCR", ["King of U"]="KOU",
+}
+
+local function FormatStandLabel(rawText)
+    local clean = StripRichText(rawText)
+    clean = StripSlotPrefix(clean)
+    clean = clean:match("^%s*(.-)%s*$")
+
+    local traitCount = {}
+    local traitOrder = {}
+    for trait in clean:gmatch("%[([A-Z]+)%]") do
+        local initial = trait:sub(1,1)
+        if not traitCount[initial] then
+            table.insert(traitOrder, initial)
+            traitCount[initial] = 0
+        end
+        traitCount[initial] += 1
+    end
+
+    local base = clean:gsub("%s*%[%u+%]",""):gsub("%s*&%s*",""):match("^%s*(.-)%s*$")
+
+    local baseUpper = base:upper()
+    for full, short in pairs(STAND_ABBREV) do
+        if baseUpper == full:upper() then base = short; break end
+    end
+
+    local traitParts = {}
+    for _, initial in ipairs(traitOrder) do
+        local count = traitCount[initial]
+        if count > 1 then table.insert(traitParts, initial .. count)
+        else               table.insert(traitParts, initial) end
+    end
+
+    if #traitParts > 0 then
+        return base .. " [" .. table.concat(traitParts, "+") .. "]"
+    end
+    return base
+end
+
+local function FormatBaseName(rawText)
+    local clean = StripRichText(rawText)
+    clean = StripSlotPrefix(clean)
+    clean = clean:gsub("%s*%[.-%]",""):gsub("%s*&%s*",""):match("^%s*(.-)%s*$")
+    local small = {of=true,the=true,a=true,an=true,["and"]=true}
+    local words = {}
+    for word in clean:lower():gmatch("%S+") do
+        if #words == 0 or not small[word] then
+            word = word:sub(1,1):upper() .. word:sub(2)
+        end
+        table.insert(words, word)
+    end
+    return table.concat(words, " ")
+end
+
+-- ================================================================
+-- [[ SLOT SCANNERS ]]
+-- ================================================================
+local function ScanStandSlots()
+    local container = SafeGet(PlayerGui, table.unpack(STAND_STORAGE_PATH))
+    if not container then return {} end
+    local slots = {}
+    local slotNum = 0
+    for i, child in ipairs(container:GetChildren()) do
+        if child:IsA("Frame") then
+            slotNum = slotNum + 1
+            local nameLabel = child:FindFirstChild("NameLabel")
+            local rawText = nameLabel and (nameLabel.Text or "") or ""
+            local name = FormatDropdownName(rawText)
+            local swapArg = i == 1 and 1 or i - 1
+            table.insert(slots, {
+                slotNum     = slotNum,
+                swapArg     = swapArg,
+                displayName = "Slot " .. slotNum .. ": " .. FormatStandLabel(rawText),
+                baseName    = FormatBaseName(rawText),
+                isEmpty     = (name == "" or name:find("Locked") ~= nil),
+            })
+        end
+    end
+    return slots
+end
+
+local function ScanStyleSlots()
+    local container = SafeGet(PlayerGui, table.unpack(STYLE_STORAGE_PATH))
+    if not container then return {} end
+    local slots = {}
+    local slotNum = 0
+    for i, child in ipairs(container:GetChildren()) do
+        if child:IsA("Frame") then
+            slotNum = slotNum + 1
+            local nameLabel = child:FindFirstChild("NameLabel")
+            local rawText = nameLabel and (nameLabel.Text or "") or ""
+            local name = FormatDropdownName(rawText)
+            local swapArg = i == 1 and 1 or i - 1
+            table.insert(slots, {
+                slotNum     = slotNum,
+                swapArg     = swapArg,
+                displayName = "Slot " .. slotNum .. ": " .. FormatBaseName(rawText),
+                baseName    = FormatBaseName(rawText),
+                isEmpty     = (name == "" or name:find("Locked") ~= nil),
+            })
+        end
+    end
+    return slots
+end
+
+local function GetEquippedStandSlot()
+    local lbl = SafeGet(PlayerGui, table.unpack(INV_STAND_PATH))
+    if not lbl then return nil end
+    local rawText = lbl.Text or ""
+    return {
+        slotNum     = 0,
+        swapArg     = nil,
+        displayName = "Equipped: " .. FormatStandLabel(rawText),
+        baseName    = FormatBaseName(rawText),
+        isEmpty     = false,
+        isEquipped  = true,
+    }
+end
+
+local function GetEquippedStyleSlot()
+    local lbl = SafeGet(PlayerGui, table.unpack(INV_STYLE_PATH))
+    if not lbl then return nil end
+    local rawText = lbl.Text or ""
+    return {
+        slotNum     = 0,
+        swapArg     = nil,
+        displayName = "Equipped: " .. FormatBaseName(rawText),
+        baseName    = FormatBaseName(rawText),
+        isEmpty     = false,
+        isEquipped  = true,
+    }
+end
+
+local function FindStandSlotByName(targetName)
+    local slots = ScanStandSlots()
+    for _, entry in ipairs(slots) do
+        if entry.baseName:upper():find(targetName:upper(), 1, true) then
+            return entry.swapArg
+        end
+    end
+    return nil
+end
+
+local function FindStyleSlotByName(targetName)
+    local slots = ScanStyleSlots()
+    for _, entry in ipairs(slots) do
+        if entry.baseName:upper():find(targetName:upper(), 1, true) then
+            return entry.swapArg
+        end
+    end
+    return nil
+end
+
+-- ================================================================
+-- [[ RESOURCE THRESHOLDS ]] -- identical to Proto A
+-- ================================================================
+local STORY_ENERGY_THRESHOLD   = 20
+local DUNGEON_ENERGY_THRESHOLD = 40
+local STAMINA_THRESHOLD        = 20
+local HP_DANGER                = 0.30
+local HP_HEAL                  = 0.74
+
+-- ================================================================
+-- [[ LOADOUT DEFINITIONS ]] -- identical to Proto A
+-- ================================================================
+local LOADOUT = {
+    Style = {
+        ULF    = { signature = "Light Slip Blades", label = "ULF"    },
+        Shrine = { signature = "Dismantle",          label = "Shrine" },
+    },
+    Stand = {
+        TuskOfU = { signature = "Infinite Rotation", label = "Tusk of U" },
+        KingOfU = { signature = "Raging Demon",      label = "King of U" },
+    },
+}
+
+-- ================================================================
+-- [[ STATE ]]
+-- ================================================================
+local StoryEnabled      = false
+local DungeonEnabled    = false
+local PrestigeEnabled   = CFG.prestigeEnabled
+local WorldBossPriority = false
+local CurrentStand      = "---"
+local CurrentStyle      = "---"
+local PreBossStand      = "---"
+local PreBossStyle      = "---"
+local LastActivityTime  = tick()
+
+-- ================================================================
+-- [[ GUI COLOURS ]]
+-- ================================================================
+local BG        = Color3.fromRGB(10,  11,  16 )
+local BG2       = Color3.fromRGB(16,  17,  24 )
+local BG3       = Color3.fromRGB(22,  24,  34 )
+local BG4       = Color3.fromRGB(28,  30,  44 )
+local STROKE    = Color3.fromRGB(44,  46,  70 )
+local ACCENT    = Color3.fromRGB(99,  115, 255)
+local ACCENT2   = Color3.fromRGB(55,  65,  160)
+local GOLD      = Color3.fromRGB(220, 180, 60 )
+local GOLDDARK  = Color3.fromRGB(55,  44,  8  )
+local TPRIM     = Color3.fromRGB(220, 222, 240)
+local TSUB      = Color3.fromRGB(110, 115, 155)
+local TDIM      = Color3.fromRGB(55,  58,  88 )
+local RUNBG     = Color3.fromRGB(20,  62,  38 )
+local RUNT      = Color3.fromRGB(80,  220, 130)
+local PAUBG     = Color3.fromRGB(62,  18,  18 )
+local PAUT      = Color3.fromRGB(220, 80,  80 )
+local DIVIDER   = Color3.fromRGB(30,  32,  48 )
+local BLACK     = Color3.fromRGB(0,   0,   0  )
+
+-- ================================================================
+-- [[ GUI BUILD ]]
+-- ================================================================
+local existing = PlayerGui:FindFirstChild("JJBIAutoB")
+if existing then existing:Destroy() end
+
+local ScreenGui = Instance.new("ScreenGui")
+ScreenGui.Name           = "JJBIAutoB"
+ScreenGui.ResetOnSpawn   = false
+ScreenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+ScreenGui.Parent         = PlayerGui
+
+local WIN_W = 300
+local TAB_H = 38
+
+local Main = Instance.new("Frame", ScreenGui)
+Main.Name             = "Main"
+Main.Size             = UDim2.new(0, WIN_W, 0, 310)
+Main.Position         = UDim2.new(0.5, -WIN_W/2, 0.04, 0)
+Main.BackgroundColor3 = BG
+Main.BorderSizePixel  = 0
+Main.Active           = true
+Main.Draggable        = true
+do
+    local c = Instance.new("UICorner", Main); c.CornerRadius = UDim.new(0, 10)
+    local s = Instance.new("UIStroke", Main); s.Color = STROKE; s.Thickness = 1
+end
+
+local ContentArea = Instance.new("Frame", Main)
+ContentArea.Name             = "ContentArea"
+ContentArea.Size             = UDim2.new(1, 0, 1, -TAB_H)
+ContentArea.Position         = UDim2.new(0, 0, 0, 0)
+ContentArea.BackgroundTransparency = 1
+ContentArea.BorderSizePixel  = 0
+ContentArea.ClipsDescendants = true
+
+local PageAuto = Instance.new("Frame", ContentArea)
+PageAuto.Name             = "PageAuto"
+PageAuto.Size             = UDim2.new(1, 0, 1, 0)
+PageAuto.BackgroundTransparency = 1
+PageAuto.BorderSizePixel  = 0
+PageAuto.Visible          = true
+
+local PageConfig = Instance.new("Frame", ContentArea)
+PageConfig.Name             = "PageConfig"
+PageConfig.Size             = UDim2.new(1, 0, 1, 0)
+PageConfig.BackgroundTransparency = 1
+PageConfig.BorderSizePixel  = 0
+PageConfig.Visible          = false
+
+local TabBar = Instance.new("Frame", Main)
+TabBar.Name             = "TabBar"
+TabBar.Size             = UDim2.new(1, 0, 0, TAB_H)
+TabBar.Position         = UDim2.new(0, 0, 1, -TAB_H)
+TabBar.BackgroundColor3 = BG2
+TabBar.BorderSizePixel  = 0
+do
+    local c = Instance.new("UICorner", TabBar); c.CornerRadius = UDim.new(0, 10)
+    local flat = Instance.new("Frame", TabBar)
+    flat.Size = UDim2.new(1, 0, 0, 12); flat.Position = UDim2.new(0, 0, 0, 0)
+    flat.BackgroundColor3 = BG2; flat.BorderSizePixel = 0
+    local div = Instance.new("Frame", TabBar)
+    div.Size = UDim2.new(1, 0, 0, 1); div.Position = UDim2.new(0, 0, 0, 0)
+    div.BackgroundColor3 = DIVIDER; div.BorderSizePixel = 0
+end
+
+local function MakeTab(icon, xPos, isActive)
+    local btn = Instance.new("TextButton", TabBar)
+    btn.Size             = UDim2.new(0.5, -1, 1, -8)
+    btn.Position         = UDim2.new(xPos, 0, 0, 4)
+    btn.BackgroundColor3 = isActive and BG3 or BG2
+    btn.TextColor3       = isActive and TPRIM or TSUB
+    btn.Text             = icon
+    btn.TextSize         = 18
+    btn.Font             = Enum.Font.GothamBold
+    btn.BorderSizePixel  = 0
+    do local c = Instance.new("UICorner", btn); c.CornerRadius = UDim.new(0, 6) end
+    return btn
+end
+
+local TabAutoBtn   = MakeTab("A", 0.01, true)
+local TabConfigBtn = MakeTab("S", 0.505, false)
+
+local function MakeTabIndicator(xPos)
+    local ind = Instance.new("Frame", TabBar)
+    ind.Size             = UDim2.new(0.5, -10, 0, 2)
+    ind.Position         = UDim2.new(xPos, 5, 1, -4)
+    ind.BackgroundColor3 = ACCENT
+    ind.BorderSizePixel  = 0
+    do local c = Instance.new("UICorner", ind); c.CornerRadius = UDim.new(0, 2) end
+    return ind
+end
+
+local IndAuto   = MakeTabIndicator(0.01)
+local IndConfig = MakeTabIndicator(0.505)
+IndConfig.Visible = false
+
+local function SwitchTab(tab)
+    if tab == "auto" then
+        PageAuto.Visible         = true
+        PageConfig.Visible       = false
+        TabAutoBtn.BackgroundColor3   = BG3
+        TabAutoBtn.TextColor3         = TPRIM
+        TabConfigBtn.BackgroundColor3 = BG2
+        TabConfigBtn.TextColor3       = TSUB
+        IndAuto.Visible   = true
+        IndConfig.Visible = false
+    else
+        PageAuto.Visible         = false
+        PageConfig.Visible       = true
+        TabAutoBtn.BackgroundColor3   = BG2
+        TabAutoBtn.TextColor3         = TSUB
+        TabConfigBtn.BackgroundColor3 = BG3
+        TabConfigBtn.TextColor3       = TPRIM
+        IndAuto.Visible   = false
+        IndConfig.Visible = true
+    end
+end
+
+TabAutoBtn.MouseButton1Click:Connect(function()   SwitchTab("auto")   end)
+TabConfigBtn.MouseButton1Click:Connect(function() SwitchTab("config") end)
+
+-- ================================================================
+-- [[ PAGE AUTO LAYOUT ]]
+-- ================================================================
+local PAD = 14
+
+local HeaderCard = Instance.new("Frame", PageAuto)
+HeaderCard.Size             = UDim2.new(1, -PAD*2, 0, 56)
+HeaderCard.Position         = UDim2.new(0, PAD, 0, PAD)
+HeaderCard.BackgroundColor3 = BG2
+HeaderCard.BorderSizePixel  = 0
+do
+    local c = Instance.new("UICorner", HeaderCard); c.CornerRadius = UDim.new(0, 8)
+    local s = Instance.new("UIStroke", HeaderCard); s.Color = STROKE; s.Thickness = 1
+end
+
+local StandLabel = Instance.new("TextLabel", HeaderCard)
+StandLabel.Size             = UDim2.new(1, -16, 0, 22)
+StandLabel.Position         = UDim2.new(0, 10, 0, 6)
+StandLabel.BackgroundTransparency = 1
+StandLabel.Text             = "Stand:  ---"
+StandLabel.TextColor3       = Color3.fromRGB(160, 200, 255)
+StandLabel.TextSize         = 11
+StandLabel.Font             = Enum.Font.GothamMedium
+StandLabel.TextXAlignment   = Enum.TextXAlignment.Left
+StandLabel.TextTruncate     = Enum.TextTruncate.AtEnd
+
+local StyleLabel = Instance.new("TextLabel", HeaderCard)
+StyleLabel.Size             = UDim2.new(1, -16, 0, 22)
+StyleLabel.Position         = UDim2.new(0, 10, 0, 28)
+StyleLabel.BackgroundTransparency = 1
+StyleLabel.Text             = "Style:   ---"
+StyleLabel.TextColor3       = Color3.fromRGB(255, 205, 140)
+StyleLabel.TextSize         = 11
+StyleLabel.Font             = Enum.Font.GothamMedium
+StyleLabel.TextXAlignment   = Enum.TextXAlignment.Left
+StyleLabel.TextTruncate     = Enum.TextTruncate.AtEnd
+
+local function UpdateLoadoutDisplay()
+    StandLabel.Text = "Stand:  " .. CurrentStand
+    StyleLabel.Text = "Style:   " .. CurrentStyle
+end
+
+local PrestigeBar = Instance.new("Frame", PageAuto)
+PrestigeBar.Name             = "PrestigeBar"
+PrestigeBar.Size             = UDim2.new(1, -PAD*2, 0, 18)
+PrestigeBar.Position         = UDim2.new(0, PAD, 0, 78)
+PrestigeBar.BackgroundColor3 = GOLDDARK
+PrestigeBar.BorderSizePixel  = 0
+PrestigeBar.Visible          = PrestigeEnabled
+do
+    local c = Instance.new("UICorner", PrestigeBar); c.CornerRadius = UDim.new(0, 6)
+    local g = Instance.new("UIGradient", PrestigeBar)
+    g.Color = ColorSequence.new({
+        ColorSequenceKeypoint.new(0,   Color3.fromRGB(140, 105, 5)),
+        ColorSequenceKeypoint.new(0.5, Color3.fromRGB(200, 165, 45)),
+        ColorSequenceKeypoint.new(1,   Color3.fromRGB(140, 105, 5)),
+    })
+    local lbl = Instance.new("TextLabel", PrestigeBar)
+    lbl.Size = UDim2.new(1,0,1,0); lbl.BackgroundTransparency = 1
+    lbl.Text = "Prestige Mode"; lbl.TextColor3 = GOLD
+    lbl.TextSize = 9; lbl.Font = Enum.Font.GothamBold
+    lbl.TextXAlignment = Enum.TextXAlignment.Center
+end
+
+local function MakeDivider(parent, y, label)
+    local line = Instance.new("Frame", parent)
+    line.Size             = UDim2.new(1, -PAD*2, 0, 1)
+    line.Position         = UDim2.new(0, PAD, 0, y)
+    line.BackgroundColor3 = DIVIDER
+    line.BorderSizePixel  = 0
+    if label then
+        local bg = Instance.new("Frame", line)
+        bg.Size             = UDim2.new(0, #label * 6 + 14, 0, 16)
+        bg.Position         = UDim2.new(0, 8, 0.5, -8)
+        bg.BackgroundColor3 = BG
+        bg.BorderSizePixel  = 0
+        local lbl = Instance.new("TextLabel", bg)
+        lbl.Size = UDim2.new(1,0,1,0); lbl.BackgroundTransparency = 1
+        lbl.Text = label; lbl.TextColor3 = TSUB
+        lbl.TextSize = 9; lbl.Font = Enum.Font.GothamBold
+        lbl.TextXAlignment = Enum.TextXAlignment.Center
+    end
+end
+
+MakeDivider(PageAuto, 104, "  Story  ")
+
+local function MakeBtnRow(parent, yPos)
+    local ROW_W = WIN_W - PAD*2
+    local MAIN_W  = math.floor(ROW_W * 0.47)
+    local MID_W   = math.floor(ROW_W * 0.29)
+    local SMALL_W = ROW_W - MAIN_W - MID_W - 6
+    local H = 32
+
+    local function Mk(xOff, w, bg, tc, text, ts)
+        local b = Instance.new("TextButton", parent)
+        b.Size             = UDim2.new(0, w, 0, H)
+        b.Position         = UDim2.new(0, PAD + xOff, 0, yPos)
+        b.BackgroundColor3 = bg
+        b.TextColor3       = tc
+        b.Text             = text
+        b.TextSize         = ts or 12
+        b.Font             = Enum.Font.GothamBold
+        b.BorderSizePixel  = 0
+        do local c = Instance.new("UICorner", b); c.CornerRadius = UDim.new(0, 7) end
+        return b
+    end
+
+    local x2 = MAIN_W + 3
+    local x3 = MAIN_W + MID_W + 6
+    return Mk(0, MAIN_W, BG3, TPRIM, "", 12),
+           Mk(x2, MID_W, BG3, TSUB, "", 11),
+           Mk(x3, SMALL_W, BG3, TSUB, "=", 14)
+end
+
+local StoryBtn, PrestigeBtn, StorySetBtn  = MakeBtnRow(PageAuto, 113)
+StoryBtn.Text    = "Auto Story"
+PrestigeBtn.Text = "Prestige"
+do local s = Instance.new("UIStroke", StorySetBtn); s.Color = ACCENT2; s.Thickness = 1 end
+do local s = Instance.new("UIStroke", PrestigeBtn); s.Color = STROKE; s.Thickness = 1 end
+
+MakeDivider(PageAuto, 157, "  Dungeon  ")
+
+local DungeonBtn, DailyBtn, DungeonSetBtn = MakeBtnRow(PageAuto, 166)
+DungeonBtn.Text = "Auto Dungeon"
+DailyBtn.Text   = "Daily Mode"
+do local s = Instance.new("UIStroke", DungeonSetBtn); s.Color = ACCENT2; s.Thickness = 1 end
+do local s = Instance.new("UIStroke", DailyBtn); s.Color = STROKE; s.Thickness = 1 end
+
+local StatusBar = Instance.new("Frame", PageAuto)
+StatusBar.Size             = UDim2.new(1, -PAD*2, 0, 26)
+StatusBar.Position         = UDim2.new(0, PAD, 0, 210)
+StatusBar.BackgroundColor3 = BG2
+StatusBar.BorderSizePixel  = 0
+do local c = Instance.new("UICorner", StatusBar); c.CornerRadius = UDim.new(0, 6) end
+
+local StatusLbl = Instance.new("TextLabel", StatusBar)
+StatusLbl.Size = UDim2.new(1, 0, 1, 0); StatusLbl.BackgroundTransparency = 1
+StatusLbl.Text = "Idle"; StatusLbl.TextColor3 = TSUB
+StatusLbl.TextSize = 10; StatusLbl.Font = Enum.Font.Gotham
+StatusLbl.TextXAlignment = Enum.TextXAlignment.Center
+
+local function SetStatus(text, color)
+    StatusLbl.Text       = text
+    StatusLbl.TextColor3 = color or TSUB
+end
+
+local function ApplyDisabledOverlay(btn)
+    if btn:FindFirstChild("DisabledOverlay") then return end
+    local ov = Instance.new("Frame", btn)
+    ov.Name = "DisabledOverlay"; ov.Size = UDim2.new(1,0,1,0)
+    ov.BackgroundColor3 = BLACK; ov.BackgroundTransparency = 0.5
+    ov.BorderSizePixel = 0; ov.ZIndex = btn.ZIndex + 1
+    do local c = Instance.new("UICorner", ov); c.CornerRadius = UDim.new(0, 7) end
+end
+local function RemoveDisabledOverlay(btn)
+    local o = btn:FindFirstChild("DisabledOverlay")
+    if o then o:Destroy() end
+end
+local function LockButton(btn)   btn.Active = false; ApplyDisabledOverlay(btn) end
+local function UnlockButton(btn) btn.Active = true;  RemoveDisabledOverlay(btn) end
+
+-- ================================================================
+-- [[ PAGE CONFIG LAYOUT ]]
+-- ================================================================
+local function MakeConfigBtn(parent, y, text, bg, tc)
+    local b = Instance.new("TextButton", parent)
+    b.Size             = UDim2.new(1, -PAD*2, 0, 36)
+    b.Position         = UDim2.new(0, PAD, 0, y)
+    b.BackgroundColor3 = bg or BG3
+    b.TextColor3       = tc or TPRIM
+    b.Text             = text
+    b.TextSize         = 12
+    b.Font             = Enum.Font.GothamBold
+    b.BorderSizePixel  = 0
+    do
+        local c = Instance.new("UICorner", b); c.CornerRadius = UDim.new(0, 8)
+        local s = Instance.new("UIStroke", b); s.Color = STROKE; s.Thickness = 1
+    end
+    return b
+end
+
+local SaveBtn = MakeConfigBtn(PageConfig, 18,  "Save Config")
+local KillBtn = MakeConfigBtn(PageConfig, 62,  "Kill Script", Color3.fromRGB(55,14,14), PAUT)
+
+local CfgStatus = Instance.new("TextLabel", PageConfig)
+CfgStatus.Size = UDim2.new(1, -PAD*2, 0, 18); CfgStatus.Position = UDim2.new(0, PAD, 0, 106)
+CfgStatus.BackgroundTransparency = 1; CfgStatus.Text = ""
+CfgStatus.TextColor3 = RUNT; CfgStatus.TextSize = 10; CfgStatus.Font = Enum.Font.Gotham
+CfgStatus.TextXAlignment = Enum.TextXAlignment.Center
+
+-- ================================================================
+-- [[ POPUP SYSTEM ]]
+-- ================================================================
+local PopupOverlay = Instance.new("Frame", Main)
+PopupOverlay.Size = UDim2.new(1,0,1,0); PopupOverlay.BackgroundColor3 = BLACK
+PopupOverlay.BackgroundTransparency = 0.35; PopupOverlay.BorderSizePixel = 0
+PopupOverlay.ZIndex = 30; PopupOverlay.Visible = false
+do local c = Instance.new("UICorner", PopupOverlay); c.CornerRadius = UDim.new(0, 10) end
+
+local PopupFrame = Instance.new("Frame", PopupOverlay)
+PopupFrame.BackgroundColor3 = BG2; PopupFrame.BorderSizePixel = 0; PopupFrame.ZIndex = 31
+do
+    local c = Instance.new("UICorner", PopupFrame); c.CornerRadius = UDim.new(0, 9)
+    local s = Instance.new("UIStroke", PopupFrame); s.Color = ACCENT; s.Thickness = 1.5
+end
+
+local function OpenPopup(w, h)
+    for _, child in ipairs(PopupFrame:GetChildren()) do child:Destroy() end
+    PopupFrame.Size     = UDim2.new(0, w, 0, h)
+    PopupFrame.Position = UDim2.new(0.5, -w/2, 0.5, -h/2)
+    PopupOverlay.Visible = true
+end
+
+local function ClosePopup()
+    PopupOverlay.Visible = false
+    for _, child in ipairs(PopupFrame:GetChildren()) do child:Destroy() end
+end
+
+local function PopupHeader(title)
+    local lbl = Instance.new("TextLabel", PopupFrame)
+    lbl.Size = UDim2.new(1,-36,0,22); lbl.Position = UDim2.new(0,10,0,8)
+    lbl.BackgroundTransparency = 1; lbl.Text = title
+    lbl.TextColor3 = TPRIM; lbl.TextSize = 12; lbl.Font = Enum.Font.GothamBold
+    lbl.TextXAlignment = Enum.TextXAlignment.Center; lbl.ZIndex = 32
+
+    local xBtn = Instance.new("TextButton", PopupFrame)
+    xBtn.Size = UDim2.new(0,20,0,20); xBtn.Position = UDim2.new(1,-26,0,7)
+    xBtn.BackgroundColor3 = Color3.fromRGB(60,14,14); xBtn.TextColor3 = PAUT
+    xBtn.Text = "X"; xBtn.TextSize = 10; xBtn.Font = Enum.Font.GothamBold
+    xBtn.BorderSizePixel = 0; xBtn.ZIndex = 32
+    do local c = Instance.new("UICorner", xBtn); c.CornerRadius = UDim.new(0,4) end
+    xBtn.MouseButton1Click:Connect(ClosePopup)
+
+    local div = Instance.new("Frame", PopupFrame)
+    div.Size = UDim2.new(1,-20,0,1); div.Position = UDim2.new(0,10,0,34)
+    div.BackgroundColor3 = DIVIDER; div.BorderSizePixel = 0; div.ZIndex = 32
+    return 40
+end
+
+-- ================================================================
+-- [[ SLOT PICKER ]]
+-- ================================================================
+local function ShowSlotPicker(title, slots, onSelect)
+    local ITEM_H = 32
+    local h = math.max(90, 48 + #slots * (ITEM_H + 4) + 8)
+    local w = WIN_W - 28
+    OpenPopup(w, h)
+    local y = PopupHeader(title)
+
+    for _, slot in ipairs(slots) do
+        if not slot.isEmpty then
+            local row = Instance.new("Frame", PopupFrame)
+            row.Size = UDim2.new(1,-18,0,ITEM_H); row.Position = UDim2.new(0,9,0,y)
+            row.BackgroundColor3 = BG3; row.BorderSizePixel = 0; row.ZIndex = 32
+            do local c = Instance.new("UICorner", row); c.CornerRadius = UDim.new(0,6) end
+
+            local nameLbl = Instance.new("TextLabel", row)
+            nameLbl.Size = UDim2.new(1,-64,1,0); nameLbl.Position = UDim2.new(0,10,0,0)
+            nameLbl.BackgroundTransparency = 1; nameLbl.Text = slot.displayName
+            nameLbl.TextColor3 = slot.isEquipped and GOLD or TPRIM
+            nameLbl.TextSize = 10; nameLbl.Font = Enum.Font.GothamMedium
+            nameLbl.TextXAlignment = Enum.TextXAlignment.Left
+            nameLbl.TextTruncate = Enum.TextTruncate.AtEnd; nameLbl.ZIndex = 33
+
+            local selBtn = Instance.new("TextButton", row)
+            selBtn.Size = UDim2.new(0,50,0,24); selBtn.Position = UDim2.new(1,-56,0.5,-12)
+            selBtn.BackgroundColor3 = ACCENT2; selBtn.TextColor3 = TPRIM
+            selBtn.Text = "Select"; selBtn.TextSize = 10; selBtn.Font = Enum.Font.GothamBold
+            selBtn.BorderSizePixel = 0; selBtn.ZIndex = 33
+            do local c = Instance.new("UICorner", selBtn); c.CornerRadius = UDim.new(0,5) end
+
+            local cap = slot
+            selBtn.MouseButton1Click:Connect(function() onSelect(cap) end)
+            y = y + ITEM_H + 4
+        end
+    end
+end
+
+-- ================================================================
+-- [[ PRIORITY BUILDER ]]
+-- ================================================================
+local function ShowPriorityBuilder(title, moves, currentPrio, onSave)
+    local w = WIN_W - 28
+    local h = 278
+    OpenPopup(w, h)
+    local y = PopupHeader(title)
+
+    local ordered = {}
+    for _, mn in ipairs(currentPrio or {}) do
+        for _, m in ipairs(moves) do
+            if m.name == mn then table.insert(ordered, m); break end
+        end
+    end
+
+    local function GetPool()
+        local pool = {}
+        for _, m in ipairs(moves) do
+            local found = false
+            for _, om in ipairs(ordered) do
+                if om.name == m.name then found = true; break end
+            end
+            if not found then table.insert(pool, m) end
+        end
+        return pool
+    end
+
+    local avlL = Instance.new("TextLabel", PopupFrame)
+    avlL.Size = UDim2.new(0.5,-8,0,14); avlL.Position = UDim2.new(0,9,0,y)
+    avlL.BackgroundTransparency = 1; avlL.Text = "Available"
+    avlL.TextColor3 = TSUB; avlL.TextSize = 9; avlL.Font = Enum.Font.GothamBold
+    avlL.TextXAlignment = Enum.TextXAlignment.Left; avlL.ZIndex = 32
+
+    local prioL = Instance.new("TextLabel", PopupFrame)
+    prioL.Size = UDim2.new(0.5,-8,0,14); prioL.Position = UDim2.new(0.5,1,0,y)
+    prioL.BackgroundTransparency = 1; prioL.Text = "Priority"
+    prioL.TextColor3 = TSUB; prioL.TextSize = 9; prioL.Font = Enum.Font.GothamBold
+    prioL.TextXAlignment = Enum.TextXAlignment.Left; prioL.ZIndex = 32
+    y = y + 16
+
+    local LIST_H = 152
+
+    local function MakeListFrame(xScale, xOff)
+        local f = Instance.new("Frame", PopupFrame)
+        f.Size = UDim2.new(0.5,-10,0,LIST_H); f.Position = UDim2.new(xScale,xOff,0,y)
+        f.BackgroundColor3 = BG3; f.BorderSizePixel = 0
+        f.ClipsDescendants = true; f.ZIndex = 32
+        do local c = Instance.new("UICorner", f); c.CornerRadius = UDim.new(0,6) end
+        local layout = Instance.new("UIListLayout", f)
+        layout.SortOrder = Enum.SortOrder.LayoutOrder; layout.Padding = UDim.new(0,2)
+        local pad = Instance.new("UIPadding", f)
+        pad.PaddingTop = UDim.new(0,3); pad.PaddingLeft = UDim.new(0,3); pad.PaddingRight = UDim.new(0,3)
+        return f
+    end
+
+    local poolF  = MakeListFrame(0, 9)
+    local queueF = MakeListFrame(0.5, 1)
+
+    local RebuildPool
+    local RebuildQueue
+
+    RebuildQueue = function()
+        for _, child in ipairs(queueF:GetChildren()) do
+            if child:IsA("Frame") or child:IsA("TextButton") then child:Destroy() end
+        end
+        for i, m in ipairs(ordered) do
+            local row = Instance.new("Frame", queueF)
+            row.Size = UDim2.new(1,0,0,24); row.BackgroundColor3 = BG4
+            row.BorderSizePixel = 0; row.LayoutOrder = i; row.ZIndex = 33
+            do local c = Instance.new("UICorner", row); c.CornerRadius = UDim.new(0,5) end
+
+            local numLbl = Instance.new("TextLabel", row)
+            numLbl.Size = UDim2.new(0,14,1,0); numLbl.Position = UDim2.new(0,3,0,0)
+            numLbl.BackgroundTransparency = 1; numLbl.Text = i.."."
+            numLbl.TextColor3 = ACCENT; numLbl.TextSize = 9; numLbl.Font = Enum.Font.GothamBold
+            numLbl.ZIndex = 34
+
+            local nmLbl = Instance.new("TextLabel", row)
+            nmLbl.Size = UDim2.new(1,-34,1,0); nmLbl.Position = UDim2.new(0,18,0,0)
+            nmLbl.BackgroundTransparency = 1; nmLbl.Text = m.name
+            nmLbl.TextColor3 = TPRIM; nmLbl.TextSize = 9; nmLbl.Font = Enum.Font.Gotham
+            nmLbl.TextTruncate = Enum.TextTruncate.AtEnd; nmLbl.ZIndex = 34
+
+            local rmBtn = Instance.new("TextButton", row)
+            rmBtn.Size = UDim2.new(0,16,0,16); rmBtn.Position = UDim2.new(1,-18,0.5,-8)
+            rmBtn.BackgroundColor3 = Color3.fromRGB(60,14,14); rmBtn.TextColor3 = PAUT
+            rmBtn.Text = "X"; rmBtn.TextSize = 8; rmBtn.Font = Enum.Font.GothamBold
+            rmBtn.BorderSizePixel = 0; rmBtn.ZIndex = 34
+            do local c = Instance.new("UICorner", rmBtn); c.CornerRadius = UDim.new(0,3) end
+
+            local ci = i
+            rmBtn.MouseButton1Click:Connect(function()
+                table.remove(ordered, ci)
+                RebuildPool(); RebuildQueue()
+            end)
+        end
+    end
+
+    RebuildPool = function()
+        for _, child in ipairs(poolF:GetChildren()) do
+            if child:IsA("TextButton") then child:Destroy() end
+        end
+        local pool = GetPool()
+        for pi, pm in ipairs(pool) do
+            local pb = Instance.new("TextButton", poolF)
+            pb.Size = UDim2.new(1,0,0,24); pb.BackgroundColor3 = BG4
+            pb.TextColor3 = TPRIM; pb.Text = pm.name; pb.TextSize = 9
+            pb.Font = Enum.Font.Gotham; pb.TextTruncate = Enum.TextTruncate.AtEnd
+            pb.BorderSizePixel = 0; pb.LayoutOrder = pi; pb.ZIndex = 33
+            do local c = Instance.new("UICorner", pb); c.CornerRadius = UDim.new(0,5) end
+            local captured = pm
+            pb.MouseButton1Click:Connect(function()
+                table.insert(ordered, captured); pb:Destroy(); RebuildQueue()
+            end)
+        end
+    end
+
+    RebuildPool(); RebuildQueue()
+
+    local saveBtn = Instance.new("TextButton", PopupFrame)
+    saveBtn.Size = UDim2.new(1,-18,0,28); saveBtn.Position = UDim2.new(0,9,0,y+LIST_H+6)
+    saveBtn.BackgroundColor3 = ACCENT2; saveBtn.TextColor3 = TPRIM
+    saveBtn.Text = "Save Priority"; saveBtn.TextSize = 11; saveBtn.Font = Enum.Font.GothamBold
+    saveBtn.BorderSizePixel = 0; saveBtn.ZIndex = 32
+    do
+        local c = Instance.new("UICorner", saveBtn); c.CornerRadius = UDim.new(0,7)
+        local s = Instance.new("UIStroke", saveBtn); s.Color = ACCENT; s.Thickness = 1
+    end
+    saveBtn.MouseButton1Click:Connect(function()
+        local result = {}
+        for _, m in ipairs(ordered) do table.insert(result, m.name) end
+        onSave(result)
+    end)
+end
+
+-- ================================================================
+-- [[ DAILY MODE POPUP ]]
+-- ================================================================
+local function ShowDailyPopup()
+    local w = WIN_W - 28
+    OpenPopup(w, 150)
+    local y = PopupHeader("Daily Mode - Stop Floor")
+
+    local infoLbl = Instance.new("TextLabel", PopupFrame)
+    infoLbl.Size = UDim2.new(1,-18,0,18); infoLbl.Position = UDim2.new(0,9,0,y)
+    infoLbl.BackgroundTransparency = 1; infoLbl.Text = "Flee dungeon and switch to story at floor:"
+    infoLbl.TextColor3 = TSUB; infoLbl.TextSize = 10; infoLbl.Font = Enum.Font.Gotham
+    infoLbl.TextXAlignment = Enum.TextXAlignment.Center; infoLbl.ZIndex = 32
+    y = y + 22
+
+    local ib = Instance.new("TextBox", PopupFrame)
+    ib.Size = UDim2.new(1,-18,0,30); ib.Position = UDim2.new(0,9,0,y)
+    ib.BackgroundColor3 = BG3; ib.TextColor3 = TPRIM
+    ib.PlaceholderText = "e.g.  1000"; ib.PlaceholderColor3 = TDIM
+    ib.Text = CFG.dailyFloor and tostring(CFG.dailyFloor) or ""
+    ib.TextSize = 13; ib.Font = Enum.Font.GothamMedium
+    ib.BorderSizePixel = 0; ib.ZIndex = 32; ib.ClearTextOnFocus = false
+    do local c = Instance.new("UICorner", ib); c.CornerRadius = UDim.new(0,6) end
+    y = y + 36
+
+    local setBtn = Instance.new("TextButton", PopupFrame)
+    setBtn.Size = UDim2.new(1,-18,0,28); setBtn.Position = UDim2.new(0,9,0,y)
+    setBtn.BackgroundColor3 = ACCENT2; setBtn.TextColor3 = TPRIM
+    setBtn.Text = "Enable Daily Mode"; setBtn.TextSize = 11; setBtn.Font = Enum.Font.GothamBold
+    setBtn.BorderSizePixel = 0; setBtn.ZIndex = 32
+    do local c = Instance.new("UICorner", setBtn); c.CornerRadius = UDim.new(0,7) end
+
+    setBtn.MouseButton1Click:Connect(function()
+        local floor = tonumber(ib.Text); if not floor then return end
+        CFG.dailyFloor = floor; CFG.dailyModeOn = true
+        DailyBtn.BackgroundColor3 = Color3.fromRGB(20, 50, 70)
+        DailyBtn.TextColor3       = Color3.fromRGB(100, 190, 255)
+        ClosePopup()
+        SetStatus("Daily: floor " .. floor, Color3.fromRGB(100, 190, 255))
+    end)
+end
+
+-- ================================================================
+-- [[ SETTINGS FLOWS ]]
+-- ================================================================
+local function GetMovePool(standName, styleName)
+    local pool = {}
+    local styleKey = styleName
+    if styleName == "ULF" then styleKey = "Ultimate Lifeform" end
+    if standName and STAND_MOVES[standName] then
+        for _, m in ipairs(STAND_MOVES[standName].moves) do table.insert(pool, m) end
+    end
+    if styleKey and STYLE_MOVES[styleKey] then
+        for _, m in ipairs(STYLE_MOVES[styleKey].moves) do
+            if m.statusType ~= "heal" then table.insert(pool, m) end
+        end
+    end
+    return pool
+end
+
+local function BuildStandPickerList()
+    local list = {}
+    local eq = GetEquippedStandSlot()
+    if eq and not eq.isEmpty then table.insert(list, eq) end
+    for _, s in ipairs(ScanStandSlots()) do
+        if not s.isEmpty then table.insert(list, s) end
+    end
+    return list
+end
+
+local function BuildStylePickerList()
+    local list = {}
+    local eq = GetEquippedStyleSlot()
+    if eq and not eq.isEmpty then table.insert(list, eq) end
+    for _, s in ipairs(ScanStyleSlots()) do
+        if not s.isEmpty then table.insert(list, s) end
+    end
+    return list
+end
+
+local function RunStorySettingsFlow()
+    local standList = BuildStandPickerList()
+    ShowSlotPicker("Story - Select Stand", standList, function(s)
+        CFG.storyStandName = s.baseName
+        local storyMoves = GetMovePool(CFG.storyStandName, "Ultimate Lifeform")
+        ShowPriorityBuilder("Priority - Enrico Pucci", storyMoves, CFG.pucciPriority, function(p1)
+            CFG.pucciPriority = p1
+            ShowPriorityBuilder("Priority - Tooru", storyMoves, CFG.tooruPriority, function(p2)
+                CFG.tooruPriority = p2
+                local wbStandList = BuildStandPickerList()
+                ShowSlotPicker("World Boss - Select Stand", wbStandList, function(ws)
+                    CFG.wbStandName = ws.baseName
+                    local wbStyleList = BuildStylePickerList()
+                    ShowSlotPicker("World Boss - Select Style", wbStyleList, function(wst)
+                        CFG.wbStyleName = wst.baseName
+                        local wbMoves = GetMovePool(CFG.wbStandName, CFG.wbStyleName)
+                        ShowPriorityBuilder("Priority - World Boss", wbMoves, CFG.wbPriority, function(p3)
+                            CFG.wbPriority = p3
+                            ClosePopup()
+                            SetStatus("Story config saved", RUNT)
+                            task.delay(3, function() if not StoryEnabled then SetStatus("Idle") end end)
+                        end)
+                    end)
+                end)
+            end)
+        end)
+    end)
+end
+
+local function RunDungeonSettingsFlow()
+    local standList = BuildStandPickerList()
+    ShowSlotPicker("Dungeon - Select Stand", standList, function(s)
+        CFG.dungeonStandName = s.baseName
+        local dungeonMoves = GetMovePool(CFG.dungeonStandName, "Ultimate Lifeform")
+        ShowPriorityBuilder("Priority - Dungeon", dungeonMoves, CFG.dungeonPriority, function(p1)
+            CFG.dungeonPriority = p1
+            ClosePopup()
+            SetStatus("Dungeon config saved", RUNT)
+            task.delay(3, function() if not DungeonEnabled then SetStatus("Idle") end end)
+        end)
+    end)
+end
+
+-- ================================================================
+-- [[ COMBAT READS ]] -- identical to Proto A
+-- ================================================================
+local function GetPlayerFighter(ctx)
+    return SafeGet(ctx.Root(), "HealthbarArea","AlliesContainer","Fighter_Player")
+end
+local function GetEnemyFighter(ctx)
+    return SafeGet(ctx.Root(), "HealthbarArea","EnemiesContainer","Fighter_Enemy")
+end
+
+local function IsInStoryBattle()
+    return GetPlayerFighter(StoryCtx) ~= nil or GetEnemyFighter(StoryCtx) ~= nil
+end
+local function IsInDungeonBattle()
+    return GetPlayerFighter(DungeonCtx) ~= nil and GetEnemyFighter(DungeonCtx) ~= nil
+end
+
+local function TryFleeFromDungeon()
+    DungeonUseSkill("Flee")
+    local logText = SafeGet(PlayerGui, table.unpack(DUNGEON_LOG_PATH))
+    if not logText then task.wait(1); return false end
+    local waited = 0
+    while waited < 3 do
+        if (logText.Text or ""):find("DUNGEON FLED!") then return true end
+        task.wait(0.2); waited += 0.2
+    end
+    return false
+end
+
+local function GetResources(ctx)
+    local label = SafeGet(ctx.Root(), "ResourceLabel")
+    if not label then return 0, 0 end
+    local text    = label.Text or ""
+    local energy  = tonumber(text:match("ENERGY:%s*(%d+)"))  or 0
+    local stamina = tonumber(text:match("STAMINA:%s*(%d+)")) or 0
+    return energy, stamina
+end
+
+local function GetHP(ctx)
+    local fighter = GetPlayerFighter(ctx)
+    if not fighter then return 999, 999, 1 end
+    local hpText = SafeGet(fighter, "InfoArea","HpContainer","HpText")
+    if not hpText then return 999, 999, 1 end
+    local cur, max = (hpText.Text or ""):match("(%d+)%s*/%s*(%d+)")
+    cur = tonumber(cur) or 999; max = tonumber(max) or 999
+    return cur, max, (max > 0 and cur / max or 1)
+end
+
+local function GetStatusDuration(fighter, statusName)
+    if not fighter then return 0 end
+    local container = SafeGet(fighter, "InfoArea","StatusContainer")
+    if not container then return 0 end
+    local lower = statusName:lower()
+    for _, frame in ipairs(container:GetChildren()) do
+        if frame:IsA("Frame") then
+            local nameMatch  = frame.Name:lower() == lower
+            local titleAttr  = frame:GetAttribute("Title")
+            local titleMatch = titleAttr and tostring(titleAttr):lower() == lower
+            if nameMatch or titleMatch then
+                local durAttr = frame:GetAttribute("TooltipDur")
+                if durAttr then return tonumber(durAttr) or 0 end
+                local durLabel = frame:FindFirstChild("Duration")
+                if durLabel and durLabel:IsA("TextLabel") then return tonumber(durLabel.Text) or 0 end
+                return 1
+            end
+        end
+    end
+    return 0
+end
+
+local function FighterHasStatus(fighter, name) return GetStatusDuration(fighter, name) > 0 end
+local function EnemyStatusDur(ctx, name)       return GetStatusDuration(GetEnemyFighter(ctx), name) end
+local function IsPlayerIncapacitated(ctx)
+    local f = GetPlayerFighter(ctx)
+    return FighterHasStatus(f,"Stun") or FighterHasStatus(f,"Freeze")
+end
+local function IsConfused(ctx) return FighterHasStatus(GetPlayerFighter(ctx),"Confusion") end
+local function EnemyHasStatus(ctx, name)  return FighterHasStatus(GetEnemyFighter(ctx), name)               end
+local function EnemyIsStunImmune(ctx)     return EnemyHasStatus(ctx,"StunImmunity")                         end
+local function EnemyIsConfImmune(ctx)     return EnemyHasStatus(ctx,"ConfImmunity")                         end
+local function EnemyIsStunned(ctx)        return EnemyHasStatus(ctx,"Stun") or EnemyHasStatus(ctx,"Freeze") end
+local function EnemyIsConfused(ctx)       return EnemyHasStatus(ctx,"Confusion")                            end
+local function EnemyIsBurning(ctx)        return EnemyHasStatus(ctx,"Burn")                                 end
+
+-- ================================================================
+-- [[ MOVESET ]] -- identical to Proto A
+-- ================================================================
+local function GetMoveButton(ctx, skillName)
+    local area = SafeGet(ctx.Root(), "AbilitiesArea")
+    if not area then return nil end
+    for _, btn in ipairs(area:GetChildren()) do
+        if btn:IsA("TextButton") then
+            local base = btn.Name:match("^(.-)%s*%(%d+%)%s*$") or btn.Name
+            if base == skillName then return btn end
+        end
+    end
+    return nil
+end
+local function CanUse(ctx, skillName)
+    local btn = GetMoveButton(ctx, skillName)
+    if not btn then return false end
+    return not btn.Name:match("%(%d+%)")
+end
+local function UseSkill(ctx, name) ctx.UseSkill(name) end
+
+-- ================================================================
+-- [[ LOADOUT DETECTION ]] -- identical to Proto A
+-- ================================================================
+local function DetectLoadoutFromInventory()
+    local styleNode = SafeGet(PlayerGui, table.unpack(INV_STYLE_PATH))
+    local standNode = SafeGet(PlayerGui, table.unpack(INV_STAND_PATH))
+    if styleNode then
+        local t = styleNode.Text or ""
+        if     t:find("ULTIMATE LIFEFORM") then CurrentStyle = "ULF"
+        elseif t:find("SHRINE")            then CurrentStyle = "Shrine"
+        else                                    CurrentStyle = "Unknown" end
+    end
+    if standNode then CurrentStand = FormatStandLabel(standNode.Text or "") end
+    UpdateLoadoutDisplay()
+end
+
+local function ConfirmLoadoutInCombat(ctx)
+    local area = SafeGet(ctx.Root(), "AbilitiesArea")
+    if not area then return end
+    for _, btn in ipairs(area:GetChildren()) do
+        if btn:IsA("TextButton") then
+            local base = btn.Name:match("^(.-)%s*%(%d+%)%s*$") or btn.Name
+            for _, data in pairs(LOADOUT.Style) do
+                if base == data.signature then CurrentStyle = data.label end
+            end
+            for _, data in pairs(LOADOUT.Stand) do
+                if base == data.signature then
+                    local standNode = SafeGet(PlayerGui, table.unpack(INV_STAND_PATH))
+                    if standNode then CurrentStand = FormatStandLabel(standNode.Text or "")
+                    else              CurrentStand = data.label end
+                end
+            end
+        end
+    end
+    UpdateLoadoutDisplay()
+end
+
+-- ================================================================
+-- [[ LOADOUT ENFORCEMENT ]]
+-- ================================================================
+local function FleeAnyActiveBattle()
+    if IsInStoryBattle() then
+        StoryUseSkill("Flee"); task.wait(1)
+    elseif IsInDungeonBattle() then
+        TryFleeFromDungeon(); task.wait(0.5)
+    end
+end
+
+local function EnsureStyle(targetStyle)
+    local fullName = targetStyle
+    if targetStyle == "ULF" then fullName = "Ultimate Lifeform" end
+
+    local function styleMatches()
+        if targetStyle == "ULF" and CurrentStyle == "ULF" then return true end
+        if CurrentStyle:lower() == fullName:lower() then return true end
+        return false
+    end
+
+    if styleMatches() then return end
+    FleeAnyActiveBattle()
+    local slot = FindStyleSlotByName(fullName)
+    if slot then SwapStyle(slot) else SwapStyle(1) end
+    local waited = 0
+    while waited < 5 do
+        task.wait(0.3); waited += 0.3
+        DetectLoadoutFromInventory()
+        if styleMatches() then return end
+    end
+end
+
+local function EnsureStand(targetStand)
+    if CurrentStand:upper():find(targetStand:upper(), 1, true) then return end
+    local slot = FindStandSlotByName(targetStand)
+    if not slot then return end
+    FleeAnyActiveBattle()
+    SwapStand(slot)
+    local waited = 0
+    while waited < 5 do
+        task.wait(0.3); waited += 0.3
+        DetectLoadoutFromInventory()
+        if CurrentStand:upper():find(targetStand:upper(), 1, true) then return end
+    end
+end
+
+local function EnforceStoryLoadout()
+    if not IsInStoryBattle() then FleeAnyActiveBattle() end
+    DetectLoadoutFromInventory()
+    if CFG.storyStandName and CFG.storyStandName ~= "" then
+        EnsureStand(CFG.storyStandName)
+    end
+    EnsureStyle("ULF")
+end
+
+local function EnforceDungeonLoadout()
+    if not IsInDungeonBattle() then FleeAnyActiveBattle() end
+    DetectLoadoutFromInventory()
+    if CFG.dungeonStandName and CFG.dungeonStandName ~= "" then
+        EnsureStand(CFG.dungeonStandName)
+    end
+    EnsureStyle("ULF")
+end
+
+-- ================================================================
+-- [[ SURVIVAL CHECK ]] -- identical to Proto A
+-- ================================================================
+local function HandleSurvival(ctx)
+    local _, _, hpPct = GetHP(ctx)
+    if hpPct < HP_DANGER then
+        if     CanUse(ctx,"Instant Reformation") then UseSkill(ctx,"Instant Reformation")
+        elseif CanUse(ctx,"Block")               then UseSkill(ctx,"Block")
+        else                                          UseSkill(ctx,"Rest") end
+        return true
+    end
+    if hpPct < HP_HEAL then
+        if CanUse(ctx,"Instant Reformation") then
+            ctx.HasBlockedThisDip = false
+            UseSkill(ctx,"Instant Reformation"); return true
+        end
+        if not ctx.HasBlockedThisDip then
+            ctx.HasBlockedThisDip = true
+            if CanUse(ctx,"Block") then UseSkill(ctx,"Block"); return true end
+        end
+    else
+        ctx.HasBlockedThisDip = false
+    end
+    return false
+end
+
+-- ================================================================
+-- [[ PRIORITY EXECUTION ]]
+-- ================================================================
+local function ExecutePriority(ctx, priorityList, energyThreshold)
+    if not priorityList or #priorityList == 0 then return false end
+    local threshold = energyThreshold or STORY_ENERGY_THRESHOLD
+    local energy, stamina = GetResources(ctx)
+
+    local standName, styleKey
+    if ctx == WorldBossCtx then
+        standName = CFG.wbStandName; styleKey = CFG.wbStyleName
+    elseif ctx == DungeonCtx then
+        standName = CFG.dungeonStandName; styleKey = "Ultimate Lifeform"
+    else
+        standName = CFG.storyStandName; styleKey = "Ultimate Lifeform"
+    end
+
+    local moveMap = {}
+    if standName and STAND_MOVES[standName] then
+        for _, m in ipairs(STAND_MOVES[standName].moves) do moveMap[m.name] = m end
+    end
+    if styleKey and STYLE_MOVES[styleKey] then
+        for _, m in ipairs(STYLE_MOVES[styleKey].moves) do moveMap[m.name] = m end
+    end
+
+    for _, moveName in ipairs(priorityList) do
+        if CanUse(ctx, moveName) then
+            local m = moveMap[moveName]
+            local skip = false
+            if m then
+                if m.cost == "energy"  and energy  < threshold        then skip = true end
+                if m.cost == "stamina" and stamina < STAMINA_THRESHOLD then skip = true end
+                if not skip then
+                    local st = m.statusType
+                    if     st == "confusion" then if EnemyIsConfImmune(ctx) or EnemyIsConfused(ctx) then skip = true end
+                    elseif st == "stun"      then if EnemyIsStunImmune(ctx) or EnemyIsStunned(ctx)  then skip = true end
+                    elseif st == "burn"      then if EnemyStatusDur(ctx,"Burn")  > 1 then skip = true end
+                    elseif st == "bleed"     then if EnemyStatusDur(ctx,"Bleed") > 1 then skip = true end
+                    end
+                end
+            end
+            if not skip then UseSkill(ctx, moveName); return true end
+        end
+    end
+    return false
+end
+
+-- ================================================================
+-- [[ STORY COMBAT ENGINE ]]
+-- ================================================================
+local function RunStoryCombatTick()
+    local ctx             = StoryCtx
+    local energy, stamina = GetResources(ctx)
+
+    if IsPlayerIncapacitated(ctx) then UseSkill(ctx,"Rest"); return end
+    if IsConfused(ctx)            then UseSkill(ctx,"Rest"); return end
+    if HandleSurvival(ctx)        then return end
+
+    local hasEnergy  = energy  >= STORY_ENERGY_THRESHOLD
+    local hasStamina = stamina >= STAMINA_THRESHOLD
+    if not hasEnergy and not hasStamina then UseSkill(ctx,"Rest"); return end
+
+    if IsTooru() then
+        if #CFG.tooruPriority > 0 then
+            if ExecutePriority(ctx, CFG.tooruPriority) then return end
+        else
+            if hasEnergy and CanUse(ctx,"Illusory Presence") then
+                if not EnemyIsConfImmune(ctx) and not EnemyIsConfused(ctx) then UseSkill(ctx,"Illusory Presence"); return end
+            end
+            if hasEnergy and CanUse(ctx,"Rain of Debris") then UseSkill(ctx,"Rain of Debris"); return end
+            if hasEnergy and CanUse(ctx,"Golden Spin") then
+                if not EnemyIsStunImmune(ctx) and not EnemyIsStunned(ctx) then UseSkill(ctx,"Golden Spin"); return end
+            end
+            if hasStamina and CanUse(ctx,"Melting Overdrive") then
+                if not EnemyIsBurning(ctx) then UseSkill(ctx,"Melting Overdrive"); return end
+            end
+        end
+        if hasEnergy and CanUse(ctx,"Infinite Rotation") then UseSkill(ctx,"Infinite Rotation"); return end
+        UseSkill(ctx,"Rest"); return
+    end
+
+    if EnemyUsesPucciConfig() then
+        if #CFG.pucciPriority > 0 then
+            if ExecutePriority(ctx, CFG.pucciPriority) then return end
+        else
+            if hasEnergy and CanUse(ctx,"Illusory Presence") then
+                if not EnemyIsConfImmune(ctx) and not EnemyIsConfused(ctx) then UseSkill(ctx,"Illusory Presence"); return end
+            end
+            if hasEnergy and CanUse(ctx,"Golden Spin") then
+                if not EnemyIsStunImmune(ctx) and not EnemyIsStunned(ctx) then UseSkill(ctx,"Golden Spin"); return end
+            end
+        end
+        if hasEnergy and CanUse(ctx,"Infinite Rotation") then UseSkill(ctx,"Infinite Rotation"); return end
+        UseSkill(ctx,"Rest"); return
+    end
+
+    if hasEnergy and CanUse(ctx,"Infinite Rotation") then UseSkill(ctx,"Infinite Rotation"); return end
+    UseSkill(ctx,"Rest")
+end
+
+-- ================================================================
+-- [[ DUNGEON COMBAT ENGINE ]]
+-- ================================================================
+local function RunDungeonCombatTick()
+    local ctx             = DungeonCtx
+    local energy, stamina = GetResources(ctx)
+
+    if IsPlayerIncapacitated(ctx) then UseSkill(ctx,"Rest"); return end
+    if IsConfused(ctx)            then UseSkill(ctx,"Rest"); return end
+    if HandleSurvival(ctx)        then return end
+
+    local hasEnergy  = energy  >= DUNGEON_ENERGY_THRESHOLD
+    local hasStamina = stamina >= STAMINA_THRESHOLD
+    if not hasEnergy and not hasStamina then UseSkill(ctx,"Rest"); return end
+
+    if #CFG.dungeonPriority > 0 then
+        if ExecutePriority(ctx, CFG.dungeonPriority, DUNGEON_ENERGY_THRESHOLD) then return end
+    else
+        if hasEnergy and CanUse(ctx,"Illusory Presence") then
+            if not EnemyIsConfImmune(ctx) and not EnemyIsConfused(ctx) then UseSkill(ctx,"Illusory Presence"); return end
+        end
+        if hasEnergy and CanUse(ctx,"Golden Spin") then
+            if not EnemyIsStunImmune(ctx) and not EnemyIsStunned(ctx) then UseSkill(ctx,"Golden Spin"); return end
+        end
+        if hasStamina and CanUse(ctx,"Melting Overdrive") then
+            if not EnemyIsBurning(ctx) then UseSkill(ctx,"Melting Overdrive"); return end
+        end
+    end
+
+    if hasEnergy and CanUse(ctx,"Infinite Rotation") then UseSkill(ctx,"Infinite Rotation"); return end
+    if not hasEnergy and hasStamina then
+        if CanUse(ctx,"Melting Overdrive") then UseSkill(ctx,"Melting Overdrive"); return end
+        UseSkill(ctx,"Rest"); return
+    end
+    UseSkill(ctx,"Rest")
+end
+
+-- ================================================================
+-- [[ WORLD BOSS COMBAT ENGINE ]]
+-- ================================================================
+local function RunWorldBossTick()
+    local ctx             = WorldBossCtx
+    local energy, stamina = GetResources(ctx)
+
+    if IsPlayerIncapacitated(ctx) then UseSkill(ctx,"Rest"); return end
+    if IsConfused(ctx)            then UseSkill(ctx,"Rest"); return end
+    if HandleSurvival(ctx)        then return end
+
+    local hasEnergy  = energy  >= STORY_ENERGY_THRESHOLD
+    local hasStamina = stamina >= STAMINA_THRESHOLD
+    if not hasEnergy and not hasStamina then UseSkill(ctx,"Rest"); return end
+
+    if #CFG.wbPriority > 0 then
+        if ExecutePriority(ctx, CFG.wbPriority) then return end
+    else
+        if hasEnergy and CanUse(ctx,"Illusory Presence") then
+            if not EnemyIsConfImmune(ctx) and not EnemyIsConfused(ctx) then UseSkill(ctx,"Illusory Presence"); return end
+        end
+        if hasEnergy and CanUse(ctx,"Rain of Debris") then UseSkill(ctx,"Rain of Debris"); return end
+        if hasEnergy and CanUse(ctx,"Golden Spin") then
+            if not EnemyIsStunImmune(ctx) and not EnemyIsStunned(ctx) then UseSkill(ctx,"Golden Spin"); return end
+        end
+        if hasStamina and CanUse(ctx,"Malevolent Shrine") then
+            if EnemyStatusDur(ctx,"Bleed") <= 1 then UseSkill(ctx,"Malevolent Shrine"); return end
+        end
+        if hasStamina and CanUse(ctx,"Divine Flame") then
+            if EnemyStatusDur(ctx,"Burn") <= 1 then UseSkill(ctx,"Divine Flame"); return end
+        end
+    end
+
+    if hasEnergy and CanUse(ctx,"Infinite Rotation") then UseSkill(ctx,"Infinite Rotation"); return end
+    if not hasEnergy and hasStamina then
+        if     CanUse(ctx,"Malevolent Shrine") then UseSkill(ctx,"Malevolent Shrine"); return
+        elseif CanUse(ctx,"Divine Flame")      then UseSkill(ctx,"Divine Flame");      return
+        else                                        UseSkill(ctx,"Rest");              return end
+    end
+    UseSkill(ctx,"Rest")
+end
+
+-- ================================================================
+-- [[ BATTLE LOOPS ]] -- identical to Proto A
+-- ================================================================
+local function RunStoryBattleLoop(enabledFlag)
+    StoryCtx.HasBlockedThisDip = false
+    task.wait(0.5)
+    ConfirmLoadoutInCombat(StoryCtx)
+    while enabledFlag() and not ScriptKilled do
+        if not IsInStoryBattle() then
+            -- Combat just ended. If prestige should fire, do it NOW before
+            -- the game auto-engages the next story.
+            if PrestigeEnabled and ShouldPrestigeNow() then
+                FirePrestige()
+                task.wait(ACTION_CD)
+                return
+            end
+            -- Not prestiging, exit loop normally
+            break
+        end
+        RunStoryCombatTick()
+        task.wait(ACTION_CD)
+    end
+    StoryCtx.HasBlockedThisDip = false
+end
+
+local function RunDungeonBattleLoop(enabledFlag)
+    DungeonCtx.HasBlockedThisDip = false
+    task.wait(0.5)
+    ConfirmLoadoutInCombat(DungeonCtx)
+    while enabledFlag() and not ScriptKilled and IsInDungeonBattle() do
+        RunDungeonCombatTick(); task.wait(ACTION_CD)
+    end
+    DungeonCtx.HasBlockedThisDip = false
+end
+
+-- ================================================================
+-- [[ WORLD BOSS HELPERS ]] -- identical to Proto A
+-- ================================================================
+local function ParseTimerLabel()
+    local label = SafeGet(PlayerGui, table.unpack(WB_TIMER_PATH))
+    if not label then return nil end
+    local mins, secs = (label.Text or ""):match("(%d+):(%d+)")
+    if not mins then return nil end
+    return tonumber(mins) * 60 + tonumber(secs)
+end
+
+local function GetEngageBtnText()
+    local btn = SafeGet(PlayerGui, table.unpack(WB_ENGAGE_PATH))
+    return btn and (btn.Text or "") or ""
+end
+
+local function WaitForBossTimer()
+    while StoryEnabled and not ScriptKilled do
+        local secs = ParseTimerLabel()
+        if not secs or secs <= 0 then return end
+        if secs > 30 * 60 then
+            local elapsed = 0
+            while elapsed < 1800 and StoryEnabled and not ScriptKilled do task.wait(1); elapsed += 1 end
+        elseif secs > 10 * 60 then
+            local elapsed = 0
+            while elapsed < 600 and StoryEnabled and not ScriptKilled do task.wait(1); elapsed += 1 end
+        else
+            local elapsed = 0
+            while elapsed < secs and StoryEnabled and not ScriptKilled do task.wait(1); elapsed += 1 end
+            return
+        end
+    end
+end
+
+local function RunWorldBossScanner()
+    local engageText = GetEngageBtnText()
+    if not engageText:find("ENGAGE BOSS") then WaitForBossTimer() end
+    while StoryEnabled and not ScriptKilled do
+        local et = GetEngageBtnText()
+        if et:find("ENGAGE BOSS") then
+            WorldBossPriority = true
+            while WorldBossPriority and StoryEnabled and not ScriptKilled do task.wait(1) end
+            task.wait(10); WaitForBossTimer()
+        elseif et:find("ALREADY FOUGHT") then
+            task.wait(5); WaitForBossTimer()
+        else
+            task.wait(5); WaitForBossTimer()
+        end
+    end
+end
+
+-- ================================================================
+-- [[ WORLD BOSS FIGHT ]]
+-- ================================================================
+local function RunWorldBossFight()
+    PreBossStand = CurrentStand
+    PreBossStyle = CurrentStyle
+
+    DetectLoadoutFromInventory()
+
+    local wbStand = CFG.wbStandName or "Tusk of U"
+    local wbStyle = CFG.wbStyleName or "Shrine"
+
+    if CurrentStyle ~= wbStyle then
+        local slot = FindStyleSlotByName(wbStyle)
+        if slot then SwapStyle(slot) else SwapStyle(1) end
+        local waited = 0
+        while waited < 5 do
+            task.wait(0.3); waited += 0.3
+            DetectLoadoutFromInventory()
+            if CurrentStyle == wbStyle then break end
+        end
+    end
+    EnsureStand(wbStand)
+
+    EngageWorldBoss()
+
+    local turnLabel = SafeGet(PlayerGui, table.unpack(WB_TURN_PATH))
+    local waited = 0; local fightStarted = false
+    while waited < 8 and not ScriptKilled do
+        task.wait(0.3); waited += 0.3
+        if turnLabel and (turnLabel.Text or ""):find("Turns Remaining: 10/10") then
+            fightStarted = true; break
+        end
+    end
+    if not fightStarted then WorldBossUseSkill("Infinite Rotation"); task.wait(1) end
+
+    local logText = SafeGet(PlayerGui, table.unpack(WB_LOG_PATH))
+    WorldBossCtx.HasBlockedThisDip = false
+    task.wait(0.5)
+    ConfirmLoadoutInCombat(WorldBossCtx)
+
+    local elapsed = 0
+    while elapsed < 120 and not ScriptKilled do
+        if logText then
+            local log = logText.Text or ""
+            if log:find("Damage Dealt:") or log:find("Loot Secured") then break end
+        end
+        RunWorldBossTick(); task.wait(ACTION_CD); elapsed += ACTION_CD
+    end
+
+    WorldBossCtx.HasBlockedThisDip = false
+
+    if CurrentStyle ~= PreBossStyle then
+        local slot = FindStyleSlotByName(PreBossStyle)
+        if slot then SwapStyle(slot) else SwapStyle(1) end
+        task.wait(0.5)
+    end
+    if not CurrentStand:upper():find(PreBossStand:upper(), 1, true) then
+        local slot = FindStandSlotByName(PreBossStand)
+        if slot then SwapStand(slot); task.wait(0.5) end
+    end
+    if CurrentStyle ~= PreBossStyle or not CurrentStand:upper():find(PreBossStand:upper(), 1, true) then
+        DetectLoadoutFromInventory()
+    end
+
+    WorldBossPriority = false
+end
+
+-- ================================================================
+-- [[ TRAINING + KEY PRESS ]]
+-- ================================================================
+local function PressGameKey(keyCode)
+    local key = keyCode.Value
+    if keypress then
+        keypress(key); task.wait(0.05); keyrelease(key)
+    else
+        local vim = game:GetService("VirtualInputManager")
+        vim:SendKeyEvent(true,  keyCode, false, game)
+        task.wait(0.05)
+        vim:SendKeyEvent(false, keyCode, false, game)
+    end
+end
+
+local function EnsureTraining()
+    -- Navigate to training page so the frame is active
+    PressGameKey(Enum.KeyCode.Five)
+    task.wait(1.5)
+    -- Read the button - only fire if training is currently OFF
+    local btn = SafeGet(PlayerGui, table.unpack(TRAINING_BTN_PATH))
+    local text = btn and (btn.Text or "") or ""
+    if text:find("Start Training") or text == "" then
+        -- "Start Training" = off, fire once to turn on
+        -- empty = couldn't read, fire once as best effort
+        ToggleTraining:FireServer(true)
+    end
+    -- if "Stop Training" = already on, don't fire (would toggle it OFF)
+    task.wait(0.5)
+    PressGameKey(Enum.KeyCode.One)
+    task.wait(0.5)
+end
+
+-- ================================================================
+-- [[ AUTO STORY LOOP ]]
+-- ================================================================
+local function RunStoryLoop()
+    PressGameKey(Enum.KeyCode.One)
+    task.wait(0.3)
+
+    EnforceStoryLoadout()
+    TryFleeFromDungeon()
+    task.wait(0.5)
+
+    -- finish any combat already in progress on entry
+    if IsInStoryBattle() then
+        RunStoryBattleLoop(function() return StoryEnabled end)
+        task.wait(ACTION_CD)
+    end
+
+    task.spawn(RunWorldBossScanner)
+
+    while StoryEnabled and not ScriptKilled do
+        if WorldBossPriority then
+            if IsInStoryBattle() then
+                RunStoryBattleLoop(function() return StoryEnabled end)
+                task.wait(ACTION_CD)
+            end
+            RunWorldBossFight(); task.wait(ACTION_CD)
+
+        elseif PrestigeEnabled and ShouldPrestigeNow() then
+            -- Prestige is available: finish current combat if in one, then prestige
+            if IsInStoryBattle() then
+                RunStoryBattleLoop(function() return StoryEnabled end)
+                task.wait(ACTION_CD)
+            end
+            FirePrestige(); task.wait(ACTION_CD)
+
+        elseif PrestigeEnabled then
+            -- Prestige mode on but not yet available: run stories normally
+            CombatAction:FireServer("EngageStory"); task.wait(ACTION_CD)
+            RunStoryBattleLoop(function() return StoryEnabled end)
+            task.wait(ACTION_CD)
+
+        else
+            CombatAction:FireServer("EngageStory"); task.wait(ACTION_CD)
+            RunStoryBattleLoop(function() return StoryEnabled end)
+            task.wait(ACTION_CD)
+        end
+
+        task.wait(ACTION_CD)
+    end
+end
+
+-- ================================================================
+-- [[ AUTO DUNGEON LOOP ]]
+-- ================================================================
+local function RunDungeonLoop()
+    -- ensure on story/dungeon/wb page
+    PressGameKey(Enum.KeyCode.One)
+    task.wait(0.5)
+
+    -- Blind-fire story flee (safe if not in story)
+    StoryUseSkill("Flee")
+    task.wait(1)
+
+    -- inline loadout enforcement without re-fleeing
+    DetectLoadoutFromInventory()
+    if CFG.dungeonStandName and CFG.dungeonStandName ~= "" then
+        EnsureStand(CFG.dungeonStandName)
+    end
+    EnsureStyle("ULF")
+
+    while DungeonEnabled and not ScriptKilled do
+        if CFG.dailyModeOn and CFG.dailyFloor then
+            local floorLabel = SafeGet(PlayerGui, table.unpack(DUNGEON_FLOOR_PATH))
+            local floor = floorLabel and tonumber((floorLabel.Text or ""):match("Floor%s+(%d+)")) or 0
+            if floor > CFG.dailyFloor then
+                TryFleeFromDungeon(); task.wait(0.5)
+                DungeonEnabled = false
+                DungeonBtn.Text             = "Auto Dungeon"
+                DungeonBtn.BackgroundColor3 = BG3
+                DungeonBtn.TextColor3       = TPRIM
+                UnlockButton(StoryBtn)
+                StoryEnabled = true
+                StoryBtn.Text             = "Running..."
+                StoryBtn.BackgroundColor3 = RUNBG
+                StoryBtn.TextColor3       = RUNT
+                LockButton(DungeonBtn)
+                SetStatus("Daily floor hit - switched to story", RUNT)
+                task.spawn(RunStoryLoop)
+                return
+            end
+        end
+
+        if not IsInDungeonBattle() then
+            StartDungeon()
+            task.wait(ACTION_CD)
+            local waited = 0
+            while not IsInDungeonBattle() and waited < 5 do
+                task.wait(0.2); waited += 0.2
+            end
+        end
+        if IsInDungeonBattle() then
+            RunDungeonBattleLoop(function() return DungeonEnabled end)
+        end
+        task.wait(ACTION_CD)
+    end
+end
+
+-- ================================================================
+-- [[ PRESTIGE VISUALS ]]
+-- ================================================================
+local function UpdatePrestigeVisuals()
+    if PrestigeEnabled then
+        PrestigeBtn.BackgroundColor3 = GOLDDARK
+        PrestigeBtn.TextColor3       = GOLD
+        PrestigeBar.Visible          = true
+    else
+        PrestigeBtn.BackgroundColor3 = BG3
+        PrestigeBtn.TextColor3       = TSUB
+        PrestigeBar.Visible          = false
+    end
+end
+UpdatePrestigeVisuals()
+
+-- ================================================================
+-- [[ BUTTON WIRING ]]
+-- ================================================================
+PrestigeBtn.MouseButton1Click:Connect(function()
+    PrestigeEnabled     = not PrestigeEnabled
+    CFG.prestigeEnabled = PrestigeEnabled
+    UpdatePrestigeVisuals()
+    -- The running loop checks PrestigeEnabled + ShouldPrestigeNow() at the
+    -- top of every iteration and after every combat. No restart needed --
+    -- restarting would interrupt active combat and cause a double-loop.
+end)
+
+StoryBtn.MouseButton1Click:Connect(function()
+    if ScriptKilled or DungeonEnabled then return end
+    StoryEnabled = not StoryEnabled
+    if StoryEnabled then
+        LastActivityTime          = tick()
+        StoryBtn.Text             = "Running..."
+        StoryBtn.BackgroundColor3 = RUNBG
+        StoryBtn.TextColor3       = RUNT
+        LockButton(DungeonBtn)
+        DungeonBtn.Text             = "Auto Dungeon"
+        DungeonBtn.BackgroundColor3 = BG3
+        DungeonBtn.TextColor3       = TPRIM
+        SetStatus("Auto Story running", RUNT)
+        task.spawn(RunStoryLoop)
+    else
+        WorldBossPriority         = false
+        StoryBtn.Text             = "Paused..."
+        StoryBtn.BackgroundColor3 = PAUBG
+        StoryBtn.TextColor3       = PAUT
+        UnlockButton(DungeonBtn)
+        SetStatus("Paused", PAUT)
+    end
+end)
+
+DungeonBtn.MouseButton1Click:Connect(function()
+    if ScriptKilled or StoryEnabled then return end
+    DungeonEnabled = not DungeonEnabled
+    if DungeonEnabled then
+        LastActivityTime            = tick()
+        DungeonBtn.Text             = "Running..."
+        DungeonBtn.BackgroundColor3 = RUNBG
+        DungeonBtn.TextColor3       = RUNT
+        LockButton(StoryBtn)
+        StoryBtn.Text             = "Auto Story"
+        StoryBtn.BackgroundColor3 = BG3
+        StoryBtn.TextColor3       = TPRIM
+        SetStatus("Auto Dungeon running", RUNT)
+        task.spawn(RunDungeonLoop)
+    else
+        DungeonBtn.Text             = "Paused..."
+        DungeonBtn.BackgroundColor3 = PAUBG
+        DungeonBtn.TextColor3       = PAUT
+        UnlockButton(StoryBtn)
+        SetStatus("Paused", PAUT)
+    end
+end)
+
+DailyBtn.MouseButton1Click:Connect(function()
+    if CFG.dailyModeOn then
+        CFG.dailyModeOn           = false
+        DailyBtn.BackgroundColor3 = BG3
+        DailyBtn.TextColor3       = TSUB
+        SetStatus("Daily mode off", TSUB)
+        task.delay(2, function() if not DungeonEnabled then SetStatus("Idle") end end)
+    else
+        ShowDailyPopup()
+    end
+end)
+
+StorySetBtn.MouseButton1Click:Connect(RunStorySettingsFlow)
+DungeonSetBtn.MouseButton1Click:Connect(RunDungeonSettingsFlow)
+
+SaveBtn.MouseButton1Click:Connect(function()
+    SaveConfig()
+    CfgStatus.Text = "Config saved."; CfgStatus.TextColor3 = RUNT
+    task.delay(3, function() CfgStatus.Text = "" end)
+end)
+
+KillBtn.MouseButton1Click:Connect(function()
+    StoryEnabled = false; DungeonEnabled = false; WorldBossPriority = false
+    KillScript(); task.wait(ACTION_CD); ScreenGui:Destroy()
+end)
+
+-- ================================================================
+-- [[ IDLE AUTO-START ]] -- 5 minute timer
+-- ================================================================
+task.spawn(function()
+    task.wait(5)
+    while not ScriptKilled do
+        task.wait(10)
+        if not StoryEnabled and not DungeonEnabled then
+            if tick() - LastActivityTime >= 300 then
+                StoryEnabled              = true
+                LastActivityTime          = tick()
+                StoryBtn.Text             = "Running..."
+                StoryBtn.BackgroundColor3 = RUNBG
+                StoryBtn.TextColor3       = RUNT
+                LockButton(DungeonBtn)
+                DungeonBtn.Text             = "Auto Dungeon"
+                DungeonBtn.BackgroundColor3 = BG3
+                DungeonBtn.TextColor3       = TPRIM
+                SetStatus("Auto-started (idle 5m)", RUNT)
+                task.spawn(RunStoryLoop)
+            end
+        else
+            LastActivityTime = tick()
+        end
+    end
+end)
+
+-- ================================================================
+-- [[ INIT ]]
+-- ================================================================
+if LoadConfig() then
+    PrestigeEnabled = CFG.prestigeEnabled
+    UpdatePrestigeVisuals()
+    if CFG.dailyModeOn then
+        DailyBtn.BackgroundColor3 = Color3.fromRGB(20, 50, 70)
+        DailyBtn.TextColor3       = Color3.fromRGB(100, 190, 255)
+    end
+end
+
+task.spawn(DetectLoadoutFromInventory)
+task.spawn(EnsureTraining)
+
+-- print("[JJBI Auto B] Loaded.")

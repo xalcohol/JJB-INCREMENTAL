@@ -2026,7 +2026,7 @@ task.spawn(function()
     while not ScriptKilled do
         task.wait(10)
         if not StoryEnabled and not DungeonEnabled then
-            if tick() - LastActivityTime >= 300 then
+            if tick() - LastActivityTime >= 30 then
                 StoryEnabled              = true
                 LastActivityTime          = tick()
                 StoryBtn.Text             = "Running..."
@@ -2036,7 +2036,7 @@ task.spawn(function()
                 DungeonBtn.Text             = "Auto Dungeon"
                 DungeonBtn.BackgroundColor3 = BG3
                 DungeonBtn.TextColor3       = TPRIM
-                SetStatus("Auto-started (idle 5m)", RUNT)
+                SetStatus("Auto-started (idle 30s)", RUNT)
                 task.spawn(RunStoryLoop)
             end
         else

@@ -1240,12 +1240,74 @@ local function TryFleeFromDungeon()
     return false
 end
 
+-- ================================================================
+-- [[ RESOURCE PATHS ]]
+-- ================================================================
+local STORY_ENERGY_PATH = {
+    "HealthbarArea","AlliesContainer","Fighter_Player",
+    "InfoArea","ResourceContainer","EnergyContainer","EnergyText"
+}
+local STORY_STAMINA_PATH = {
+    "HealthbarArea","AlliesContainer","Fighter_Player",
+    "InfoArea","ResourceContainer","StaminaContainer","StaminaText"
+}
+local DUNGEON_ENERGY_PATH = {
+    "HealthbarArea","AlliesContainer","Fighter_Player",
+    "InfoArea","ResourceContainer","EnergyContainer","EnergyText"
+}
+local DUNGEON_STAMINA_PATH = {
+    "HealthbarArea","AlliesContainer","Fighter_Player",
+    "InfoArea","ResourceContainer","StaminaContainer","StaminaText"
+}
+local WB_ENERGY_PATH = {
+    "HealthbarArea","AlliesContainer","Fighter_Player",
+    "InfoArea","ResourceContainer","EnergyContainer","EnergyText"
+}
+local WB_STAMINA_PATH = {
+    "HealthbarArea","AlliesContainer","Fighter_Player",
+    "InfoArea","ResourceContainer","StaminaContainer","StaminaText"
+}
+
+local function ReadResourceText(node)
+    if not node then return 0 end
+    local text = node.Text or ""
+    -- format is "current/max"
+    local cur = tonumber(text:match("^(%d+)")) or 0
+    return cur
+end
+
 local function GetResources(ctx)
-    local label = SafeGet(ctx.Root(), "ResourceLabel")
-    if not label then return 0, 0 end
-    local text    = label.Text or ""
-    local energy  = tonumber(text:match("ENERGY:%s*(%d+)"))  or 0
-    local stamina = tonumber(text:match("STAMINA:%s*(%d+)")) or 0
+    local root = ctx.Root()
+    if not root then return 0, 0 end
+
+    local energyPath, staminaPath
+    if ctx == StoryCtx then
+        energyPath  = STORY_ENERGY_PATH
+        staminaPath = STORY_STAMINA_PATH
+    elseif ctx == DungeonCtx then
+        energyPath  = DUNGEON_ENERGY_PATH
+        staminaPath = DUNGEON_STAMINA_PATH
+    else
+        energyPath  = WB_ENERGY_PATH
+        staminaPath = WB_STAMINA_PATH
+    end
+
+    local energyNode  = SafeGet(root, table.unpack(energyPath))
+    local staminaNode = SafeGet(root, table.unpack(staminaPath))
+
+    local energy  = ReadResourceText(energyNode)
+    local stamina = ReadResourceText(staminaNode)
+
+    -- fallback to ResourceLabel if new paths not found
+    if energy == 0 and stamina == 0 then
+        local label = SafeGet(root, "ResourceLabel")
+        if label then
+            local text    = label.Text or ""
+            energy  = tonumber(text:match("ENERGY:%s*(%d+)"))  or 0
+            stamina = tonumber(text:match("STAMINA:%s*(%d+)")) or 0
+        end
+    end
+
     return energy, stamina
 end
 
@@ -1426,7 +1488,8 @@ local function HandleSurvival(ctx)
     if hpPct < HP_DANGER then
         if     CanUse(ctx,"Instant Reformation") then UseSkill(ctx,"Instant Reformation")
         elseif CanUse(ctx,"Block")               then UseSkill(ctx,"Block")
-        else                                          UseSkill(ctx,"Rest") end
+        elseif CanUse(ctx,"Rest")                then UseSkill(ctx,"Rest")
+        else                                          UseSkill(ctx,"Basic Attack") end
         return true
     end
     if hpPct < HP_HEAL then
@@ -1498,13 +1561,21 @@ local function RunStoryCombatTick()
     local ctx             = StoryCtx
     local energy, stamina = GetResources(ctx)
 
-    if IsPlayerIncapacitated(ctx) then UseSkill(ctx,"Rest"); return end
-    if IsConfused(ctx)            then UseSkill(ctx,"Rest"); return end
-    if HandleSurvival(ctx)        then return end
+    if IsConfused(ctx) then UseSkill(ctx,"Basic Attack"); return end
+    if IsPlayerIncapacitated(ctx) then
+        if CanUse(ctx,"Rest") then UseSkill(ctx,"Rest")
+        else                       UseSkill(ctx,"Basic Attack") end
+        return
+    end
+    if HandleSurvival(ctx) then return end
 
     local hasEnergy  = energy  >= STORY_ENERGY_THRESHOLD
     local hasStamina = stamina >= STAMINA_THRESHOLD
-    if not hasEnergy and not hasStamina then UseSkill(ctx,"Rest"); return end
+    if not hasEnergy and not hasStamina then
+        if CanUse(ctx,"Rest") then UseSkill(ctx,"Rest")
+        else                       UseSkill(ctx,"Basic Attack") end
+        return
+    end
 
     if IsTooru() then
         if #CFG.tooruPriority > 0 then
@@ -1551,13 +1622,21 @@ local function RunDungeonCombatTick()
     local ctx             = DungeonCtx
     local energy, stamina = GetResources(ctx)
 
-    if IsPlayerIncapacitated(ctx) then UseSkill(ctx,"Rest"); return end
-    if IsConfused(ctx)            then UseSkill(ctx,"Rest"); return end
-    if HandleSurvival(ctx)        then return end
+    if IsConfused(ctx) then UseSkill(ctx,"Basic Attack"); return end
+    if IsPlayerIncapacitated(ctx) then
+        if CanUse(ctx,"Rest") then UseSkill(ctx,"Rest")
+        else                       UseSkill(ctx,"Basic Attack") end
+        return
+    end
+    if HandleSurvival(ctx) then return end
 
     local hasEnergy  = energy  >= DUNGEON_ENERGY_THRESHOLD
     local hasStamina = stamina >= STAMINA_THRESHOLD
-    if not hasEnergy and not hasStamina then UseSkill(ctx,"Rest"); return end
+    if not hasEnergy and not hasStamina then
+        if CanUse(ctx,"Rest") then UseSkill(ctx,"Rest")
+        else                       UseSkill(ctx,"Basic Attack") end
+        return
+    end
 
     if #CFG.dungeonPriority > 0 then
         if ExecutePriority(ctx, CFG.dungeonPriority, DUNGEON_ENERGY_THRESHOLD) then return end
@@ -1588,13 +1667,21 @@ local function RunWorldBossTick()
     local ctx             = WorldBossCtx
     local energy, stamina = GetResources(ctx)
 
-    if IsPlayerIncapacitated(ctx) then UseSkill(ctx,"Rest"); return end
-    if IsConfused(ctx)            then UseSkill(ctx,"Rest"); return end
-    if HandleSurvival(ctx)        then return end
+    if IsConfused(ctx) then UseSkill(ctx,"Basic Attack"); return end
+    if IsPlayerIncapacitated(ctx) then
+        if CanUse(ctx,"Rest") then UseSkill(ctx,"Rest")
+        else                       UseSkill(ctx,"Basic Attack") end
+        return
+    end
+    if HandleSurvival(ctx) then return end
 
     local hasEnergy  = energy  >= STORY_ENERGY_THRESHOLD
     local hasStamina = stamina >= STAMINA_THRESHOLD
-    if not hasEnergy and not hasStamina then UseSkill(ctx,"Rest"); return end
+    if not hasEnergy and not hasStamina then
+        if CanUse(ctx,"Rest") then UseSkill(ctx,"Rest")
+        else                       UseSkill(ctx,"Basic Attack") end
+        return
+    end
 
     if #CFG.wbPriority > 0 then
         if ExecutePriority(ctx, CFG.wbPriority) then return end

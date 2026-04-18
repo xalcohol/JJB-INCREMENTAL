@@ -1561,8 +1561,7 @@ local function RunStoryCombatTick()
     local ctx             = StoryCtx
     local energy, stamina = GetResources(ctx)
 
-    if IsConfused(ctx) then UseSkill(ctx,"Basic Attack"); return end
-    if IsPlayerIncapacitated(ctx) then
+    if IsConfused(ctx) or IsPlayerIncapacitated(ctx) then
         if CanUse(ctx,"Rest") then UseSkill(ctx,"Rest")
         else                       UseSkill(ctx,"Basic Attack") end
         return
@@ -1622,8 +1621,7 @@ local function RunDungeonCombatTick()
     local ctx             = DungeonCtx
     local energy, stamina = GetResources(ctx)
 
-    if IsConfused(ctx) then UseSkill(ctx,"Basic Attack"); return end
-    if IsPlayerIncapacitated(ctx) then
+    if IsConfused(ctx) or IsPlayerIncapacitated(ctx) then
         if CanUse(ctx,"Rest") then UseSkill(ctx,"Rest")
         else                       UseSkill(ctx,"Basic Attack") end
         return
@@ -1667,8 +1665,7 @@ local function RunWorldBossTick()
     local ctx             = WorldBossCtx
     local energy, stamina = GetResources(ctx)
 
-    if IsConfused(ctx) then UseSkill(ctx,"Basic Attack"); return end
-    if IsPlayerIncapacitated(ctx) then
+    if IsConfused(ctx) or IsPlayerIncapacitated(ctx) then
         if CanUse(ctx,"Rest") then UseSkill(ctx,"Rest")
         else                       UseSkill(ctx,"Basic Attack") end
         return

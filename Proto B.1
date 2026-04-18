@@ -59,7 +59,57 @@ if not _G.JJBIConfigB then
 end
 local CFG = _G.JJBIConfigB
 
+local CONFIG_FILE = "JJBIAutoB_Config.json"
+
+local function SerializeConfig()
+    -- manual JSON since we don't have HttpService in executors
+    local parts = {}
+    local function val(v)
+        if type(v) == "boolean" then return v and "true" or "false"
+        elseif type(v) == "number" then return tostring(v)
+        elseif type(v) == "string" then return '"' .. v:gsub('"', '\\"') .. '"'
+        elseif type(v) == "table" then
+            local arr = {}
+            for i = 1, #v do arr[i] = val(v[i]) end
+            return "[" .. table.concat(arr, ",") .. "]"
+        else return "null" end
+    end
+    for k, v in pairs(CFG) do
+        table.insert(parts, '"' .. k .. '":' .. val(v))
+    end
+    return "{" .. table.concat(parts, ",") .. "}"
+end
+
+local function DeserializeConfig(json)
+    -- parse key:value pairs from JSON string
+    local result = {}
+    -- booleans
+    for k, v in json:gmatch('"([^"]+)":(true)') do result[k] = true end
+    for k, v in json:gmatch('"([^"]+)":(false)') do result[k] = false end
+    -- numbers
+    for k, v in json:gmatch('"([^"]+)":(%d+%.?%d*)') do
+        if result[k] == nil then result[k] = tonumber(v) end
+    end
+    -- strings
+    for k, v in json:gmatch('"([^"]+)":"([^"]*)"') do
+        if result[k] == nil then result[k] = v end
+    end
+    -- arrays (string arrays only, for priority lists)
+    for k, arr in json:gmatch('"([^"]+)":%[([^%]]*)%]') do
+        local list = {}
+        for item in arr:gmatch('"([^"]+)"') do
+            table.insert(list, item)
+        end
+        result[k] = list
+    end
+    return result
+end
+
 local function SaveConfig()
+    local ok, err = pcall(function()
+        writefile(CONFIG_FILE, SerializeConfig())
+    end)
+    -- also keep _G copy as session fallback
     _G.JJBIConfigBSaved = {}
     for k, v in pairs(CFG) do
         if type(v) == "table" then
@@ -73,6 +123,16 @@ local function SaveConfig()
 end
 
 local function LoadConfig()
+    -- try file first (persists across sessions)
+    local ok, data = pcall(function() return readfile(CONFIG_FILE) end)
+    if ok and data and data ~= "" then
+        local parsed = DeserializeConfig(data)
+        for k, v in pairs(parsed) do
+            CFG[k] = v
+        end
+        return true
+    end
+    -- fallback to _G session copy
     if not _G.JJBIConfigBSaved then return false end
     for k, v in pairs(_G.JJBIConfigBSaved) do
         if type(v) == "table" then
@@ -1877,18 +1937,13 @@ local function PressGameKey(keyCode)
 end
 
 local function EnsureTraining()
-    -- Navigate to training page so the frame is active
     PressGameKey(Enum.KeyCode.Five)
     task.wait(1.5)
-    -- Read the button - only fire if training is currently OFF
     local btn = SafeGet(PlayerGui, table.unpack(TRAINING_BTN_PATH))
     local text = btn and (btn.Text or "") or ""
     if text:find("Start Training") or text == "" then
-        -- "Start Training" = off, fire once to turn on
-        -- empty = couldn't read, fire once as best effort
         ToggleTraining:FireServer(true)
     end
-    -- if "Stop Training" = already on, don't fire (would toggle it OFF)
     task.wait(0.5)
     PressGameKey(Enum.KeyCode.One)
     task.wait(0.5)
@@ -2103,7 +2158,7 @@ KillBtn.MouseButton1Click:Connect(function()
 end)
 
 -- ================================================================
--- [[ IDLE AUTO-START ]] -- 5 minute timer
+-- [[ IDLE AUTO-START ]]
 -- ================================================================
 task.spawn(function()
     task.wait(5)
